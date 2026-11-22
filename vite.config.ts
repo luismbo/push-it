@@ -1,12 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { defineConfig, type Plugin } from 'vite';
 import solid from '@solidjs/vite-plugin';
-import { readExtensionManifest, zipExtension } from './scripts/extension-zip.ts';
+import { zipExtension } from './scripts/extension-zip.ts';
 
 const pkg = JSON.parse(readFileSync('./package.json', 'utf8')) as { version: string };
 
 // Written by scripts/sign-firefox.ts when AMO credentials are available.
-const signedXpi = `.firefox/push-it-firefox-${readExtensionManifest().version}.xpi`;
+const signedXpi = '.firefox/push-it-firefox.xpi';
 const hasSignedXpi = existsSync(signedXpi);
 
 // Serves the extension from the site: /push-it-extension.zip (unsigned, any browser) and,

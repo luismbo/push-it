@@ -4,7 +4,8 @@
  * /push-it-firefox.xpi.
  *
  * Idempotent: AMO only accepts each version number once, so if the current manifest version
- * is already on AMO, the signed file is downloaded instead of uploading again.
+ * is already on AMO, the signed file is downloaded instead of uploading again. If AMO hasn't
+ * signed the current version within SIGN_TIMEOUT_MS, the newest already-signed version is used.
  *
  * Never fails the build: without credentials, on a non-production branch, or on any error,
  * it logs why and exits 0, and the site just offers the unsigned zip.
@@ -22,7 +23,7 @@ const AMO = 'https://addons.mozilla.org/api/v5';
 const XPI_DIR = '.firefox';
 const POLL_INTERVAL_MS = 10_000;
 const UPLOAD_TIMEOUT_MS = 5 * 60_000;
-const SIGN_TIMEOUT_MS = 10 * 60_000;
+const SIGN_TIMEOUT_MS = 4 * 60_000;
 
 const log = (msg: string) => console.log(`[firefox-sign] ${msg}`);
 
@@ -62,19 +63,27 @@ interface AmoVersion {
   file?: { status?: string; url?: string } | null;
 }
 
-async function findVersion(guid: string, version: string): Promise<AmoVersion | null> {
+// Newest first. Empty if the add-on doesn't exist yet.
+async function listVersions(guid: string): Promise<AmoVersion[]> {
   const res = await amo(
     `/addons/addon/${encodeURIComponent(guid)}/versions/?filter=all_with_unlisted&page_size=50`,
   );
-  if (res.status === 404 || res.status === 401 || res.status === 403) return null; // add-on not created yet
+  if (res.status === 404 || res.status === 401 || res.status === 403) return [];
   if (!res.ok) throw new Error(`listing versions → ${res.status}: ${(await res.text()).slice(0, 500)}`);
   const data = (await res.json()) as { results?: AmoVersion[] };
-  return data.results?.find((v) => v.version === version) ?? null;
+  return data.results ?? [];
 }
+
+async function findVersion(guid: string, version: string): Promise<AmoVersion | null> {
+  return (await listVersions(guid)).find((v) => v.version === version) ?? null;
+}
+
+const isSigned = (v: AmoVersion | null | undefined): v is AmoVersion & { file: { url: string } } =>
+  v?.file?.status === 'public' && Boolean(v.file.url);
 
 async function upload(xpi: Uint8Array): Promise<string> {
   const form = new FormData();
-  form.set('upload', new Blob([xpi], { type: 'application/zip' }), 'push-it.zip');
+  form.set('upload', new Blob([xpi as Uint8Array<ArrayBuffer>], { type: 'application/zip' }), 'push-it.zip');
   form.set('channel', 'unlisted');
   const created = await amoJson<{ uuid: string }>('/addons/upload/', { method: 'POST', body: form });
 
@@ -114,17 +123,21 @@ async function submit(guid: string, uploadUuid: string): Promise<void> {
   });
 }
 
-async function waitForSigned(guid: string, version: string): Promise<string> {
+// Returns the signed file URL, or null if AMO hasn't signed it within SIGN_TIMEOUT_MS.
+async function waitForSigned(guid: string, version: string): Promise<string | null> {
   const deadline = Date.now() + SIGN_TIMEOUT_MS;
-  while (Date.now() < deadline) {
+  while (true) {
     const v = await findVersion(guid, version);
+    if (isSigned(v)) return v.file.url;
     const status = v?.file?.status;
-    if (status === 'public' && v?.file?.url) return v.file.url;
-    if (status === 'disabled') throw new Error(`AMO rejected or disabled v${version}`);
+    if (status === 'disabled') {
+      log(`AMO rejected or disabled v${version}; check the add-on in the AMO Developer Hub`);
+      return null;
+    }
+    if (Date.now() >= deadline) return null;
     log(`waiting for AMO to sign v${version} (status: ${status ?? 'pending'})…`);
     await sleep(POLL_INTERVAL_MS);
   }
-  throw new Error(`timed out waiting for AMO to sign v${version}; the next build will pick it up`);
 }
 
 async function main(): Promise<void> {
@@ -150,24 +163,35 @@ async function main(): Promise<void> {
   };
   const { version } = manifest;
 
-  let fileUrl: string;
-  const existing = await findVersion(guid, version);
-  if (existing) {
+  if (await findVersion(guid, version)) {
     log(`v${version} of ${guid} is already on AMO; reusing it`);
-    fileUrl = await waitForSigned(guid, version);
   } else {
     log(`uploading v${version} of ${guid} for signing…`);
     const uploadUuid = await upload(zipExtension(manifest));
     await submit(guid, uploadUuid);
-    fileUrl = await waitForSigned(guid, version);
+  }
+
+  let servedVersion = version;
+  let fileUrl = await waitForSigned(guid, version);
+  if (!fileUrl) {
+    // AMO keeps signing in the background. Until it finishes, serve the newest version it has
+    // already signed, so the site never loses its permanent Firefox install.
+    const latest = (await listVersions(guid)).find(isSigned);
+    if (!latest) {
+      log(`v${version} isn't signed yet and no earlier signed version exists; serving the zip only`);
+      return;
+    }
+    log(`v${version} isn't signed yet; serving the last signed version, v${latest.version}`);
+    servedVersion = latest.version;
+    fileUrl = latest.file.url;
   }
 
   const res = await amo(fileUrl);
   if (!res.ok) throw new Error(`downloading signed file → ${res.status}`);
   const bytes = new Uint8Array(await res.arrayBuffer());
   mkdirSync(XPI_DIR, { recursive: true });
-  writeFileSync(`${XPI_DIR}/push-it-firefox-${version}.xpi`, bytes);
-  log(`saved signed v${version} (${bytes.byteLength} bytes)`);
+  writeFileSync(`${XPI_DIR}/push-it-firefox.xpi`, bytes);
+  log(`saved signed v${servedVersion} (${bytes.byteLength} bytes)`);
 }
 
 main().catch((err) => {
