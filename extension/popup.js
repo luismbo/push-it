@@ -35,6 +35,28 @@ const historyList = document.getElementById('historyList');
 const extVersion = chrome.runtime.getManifest().version;
 versionText.textContent = `Version v${extVersion}`;
 
+// Firefox closes the popup when a native file picker opens, so attachments
+// are picked from a full tab instead (opened with ?tab=1).
+const IS_FIREFOX = chrome.runtime.getURL('').startsWith('moz-extension:');
+const IS_TAB_VIEW = new URLSearchParams(location.search).has('tab');
+if (IS_TAB_VIEW) document.documentElement.classList.add('tab-view');
+
+// Firefox lets users withhold or revoke host permissions, and the server sends
+// no CORS headers, so the extension needs explicit access to the server origin.
+function originPattern(serverUrl) {
+  return `${new URL(serverUrl).origin}/*`;
+}
+
+async function hasServerAccess(serverUrl) {
+  try {
+    return await chrome.permissions.contains({ origins: [originPattern(serverUrl)] });
+  } catch {
+    return true;
+  }
+}
+
+let needsAccess = false;
+
 let myDeviceId = '';
 let currentDeviceOs = 'windows';
 let currentDeviceName = 'Windows';
@@ -256,10 +278,16 @@ async function refresh() {
   renderDeviceList();
   renderTargetBar();
 
-  statusDot.className = `dot ${state.paired ? state.status : 'disconnected'}`;
+  needsAccess = Boolean(state.paired && currentServerUrl) && !(await hasServerAccess(currentServerUrl));
+  statusText.classList.toggle('action', needsAccess);
+  statusText.title = needsAccess ? `Click to allow access to ${new URL(currentServerUrl).host}` : '';
+
+  statusDot.className = `dot ${state.paired && !needsAccess ? state.status : 'disconnected'}`;
   statusText.textContent = !state.paired
     ? 'Not paired'
-    : state.status === 'connected'
+    : needsAccess
+      ? 'Access needed · click to allow'
+      : state.status === 'connected'
       ? 'Connected'
       : state.status === 'connecting'
         ? 'Connecting...'
@@ -420,6 +448,13 @@ savePairBtn.addEventListener('click', async () => {
       return;
     }
 
+    // Must be the first await so it still counts as a user gesture in Firefox.
+    const granted = await chrome.permissions.request({ origins: [originPattern(parsed.origin)] });
+    if (!granted) {
+      showToast(`Allow access to ${parsed.host} to connect`);
+      return;
+    }
+
     await chrome.storage.local.set({
       serverUrl: parsed.origin,
       keyB64,
@@ -448,7 +483,24 @@ function getSelectedTargetsPayload() {
   return { targetIds: selectedTargetIds, targetNames: names };
 }
 
-attachBtn.addEventListener('click', () => fileInput.click());
+attachBtn.addEventListener('click', () => {
+  if (IS_FIREFOX && !IS_TAB_VIEW) {
+    chrome.tabs.create({ url: chrome.runtime.getURL('popup.html?tab=1'), active: true });
+    window.close();
+    return;
+  }
+  fileInput.click();
+});
+
+statusText.addEventListener('click', async () => {
+  if (!needsAccess || !currentServerUrl) return;
+  const granted = await chrome.permissions
+    .request({ origins: [originPattern(currentServerUrl)] })
+    .catch(() => false);
+  if (!granted) return;
+  await chrome.runtime.sendMessage({ type: 'RECONNECT' });
+  setTimeout(refresh, 600);
+});
 
 async function pushFileObject(file) {
   if (!file) return;

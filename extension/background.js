@@ -343,6 +343,8 @@ async function connect() {
       pingTimer = setInterval(() => {
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send('ping');
+          // Firefox suspends idle event pages; an extension API call resets its idle timer.
+          chrome.runtime.getPlatformInfo().catch(() => {});
         }
       }, 20000);
     };

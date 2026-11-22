@@ -600,3 +600,21 @@ input[type='text']:focus {
   font-size: 0.86rem;
   padding: 24px 12px;
 }
+
+#statusText.action {
+  color: var(--amber);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* Full-tab view (Firefox file picker fallback) */
+html.tab-view,
+html.tab-view body {
+  width: 100%;
+  height: 100vh;
+}
+
+html.tab-view .shell {
+  max-width: 640px;
+  margin: 0 auto;
+}
