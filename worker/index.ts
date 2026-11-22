@@ -4,10 +4,18 @@ import { RoomDO, VAPID_DO_NAME, type Env } from './room-do';
 export { RoomDO };
 
 const ROOM_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+const HSTS = 'max-age=31536000';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    // Force HTTPS (except for local `wrangler dev`). 308 keeps the method and body.
+    if (url.protocol === 'http:' && !LOCAL_HOSTS.has(url.hostname)) {
+      url.protocol = 'https:';
+      return Response.redirect(url.toString(), 308);
+    }
 
     if (url.pathname === '/api/version' && request.method === 'GET') {
       return Response.json(
@@ -39,6 +47,9 @@ export default {
       return stub.fetch(request);
     }
 
-    return env.ASSETS.fetch(request);
+    const asset = await env.ASSETS.fetch(request);
+    const res = new Response(asset.body, asset);
+    if (url.protocol === 'https:') res.headers.set('strict-transport-security', HSTS);
+    return res;
   },
 } satisfies ExportedHandler<Env>;
