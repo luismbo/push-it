@@ -50,6 +50,8 @@ const LONG_TEXT_THRESHOLD = 1800;
 
 export default function App() {
   const localOs: DeviceOs = detectOs();
+  const isMobile = localOs === 'android' || localOs === 'ios';
+  const isFirefox = /Firefox\//.test(navigator.userAgent);
 
   const [view, setView] = createSignal<'chat' | 'settings'>('chat');
   const [showAddDevice, setShowAddDevice] = createSignal<boolean>(false);
@@ -1142,6 +1144,83 @@ export default function App() {
                 </div>
               </Show>
             </section>
+
+            <Show when={!isMobile}>
+              <section class="card">
+                <div class="row between">
+                  <div>
+                    <strong>Browser Extension</strong>
+                    <span class="muted">
+                      Auto-open links, notifications and a right-click menu, with no tab left open
+                    </span>
+                  </div>
+                  <Show
+                    when={isFirefox && __FIREFOX_XPI__}
+                    fallback={
+                      <a class="btn primary small" href="/push-it-extension.zip" download>
+                        Download
+                      </a>
+                    }
+                  >
+                    {/* No `download` attribute: Firefox installs .xpi links directly. */}
+                    <a class="btn primary small" href="/push-it-firefox.xpi">
+                      Install
+                    </a>
+                  </Show>
+                </div>
+                <details class="install-steps" open={isFirefox}>
+                  <summary>Install in Firefox</summary>
+                  <Show
+                    when={__FIREFOX_XPI__}
+                    fallback={
+                      <>
+                        <ol>
+                          <li>
+                            Open <code>about:debugging#/runtime/this-firefox</code>
+                          </li>
+                          <li>
+                            Click <strong>Load Temporary Add-on…</strong> and pick the downloaded zip
+                          </li>
+                        </ol>
+                        <p class="muted">Temporary add-ons are removed when Firefox restarts.</p>
+                      </>
+                    }
+                  >
+                    <ol>
+                      <li>
+                        In Firefox, click{' '}
+                        <a href="/push-it-firefox.xpi">
+                          <strong>Install</strong>
+                        </a>
+                      </li>
+                      <li>
+                        Allow this site to install the add-on, then click <strong>Add</strong>
+                      </li>
+                    </ol>
+                    <p class="muted">
+                      Signed by Mozilla, so it stays installed. To update, click Install again.
+                    </p>
+                  </Show>
+                </details>
+                <details class="install-steps" open={!isFirefox}>
+                  <summary>Install in Chrome, Edge, Brave and other Chromium browsers</summary>
+                  <ol>
+                    <li>Unzip the download into a folder you'll keep</li>
+                    <li>
+                      Open <code>chrome://extensions</code> and turn on <strong>Developer mode</strong>
+                    </li>
+                    <li>
+                      Click <strong>Load unpacked</strong> and select the folder
+                    </li>
+                  </ol>
+                  <p class="muted">To update later, unzip over the same folder and click reload.</p>
+                </details>
+                <span class="muted">
+                  Then open the extension, paste a pair link from <strong>+ Add Device</strong> above, and
+                  click <strong>Save &amp; Connect</strong>.
+                </span>
+              </section>
+            </Show>
 
             <section class="card">
               <h2>Preferences</h2>

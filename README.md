@@ -85,18 +85,36 @@ Use a **Secret**, not a plain variable: `wrangler deploy` replaces dashboard var
 
 ## 🧩 Install the Browser Extension
 
+Your deployment serves the extension as a zip: open your Push It URL on a desktop browser → **Settings → Browser Extension → Download**. You can also use the `extension` folder from this repository directly.
+
 ### Chromium (Chrome, Edge, Brave, Vivaldi, …)
 
 1. Open `chrome://extensions`.
 2. Enable **Developer mode** (top right).
-3. Click **Load unpacked** and select the `extension` folder from this repository.
+3. Click **Load unpacked** and select the unzipped folder, or the `extension` folder from this repository.
 
 ### Firefox (128+)
 
 1. Open `about:debugging#/runtime/this-firefox`.
-2. Click **Load Temporary Add-on…** and select `extension/manifest.json`.
+2. Click **Load Temporary Add-on…** and select the downloaded zip, or `extension/manifest.json`.
 
-Temporary add-ons are removed when Firefox restarts. To keep it installed, sign it as an unlisted add-on on [addons.mozilla.org](https://addons.mozilla.org/developers/) (e.g. `npx web-ext sign --channel unlisted` inside `extension/`) and install the resulting `.xpi`.
+Temporary add-ons are removed when Firefox restarts. For a permanent install, set up automatic signing (below). The Settings page then shows an **Install** button in Firefox.
+
+#### Automatic Firefox signing (optional)
+
+Firefox only keeps add-ons that Mozilla has signed. The build can sign it for you as an **unlisted** add-on: it isn't published on addons.mozilla.org, and it's free.
+
+1. Sign in at [addons.mozilla.org](https://addons.mozilla.org/developers/addon/api/key/) and generate API credentials.
+2. In the Cloudflare dashboard, open your Worker → **Settings → Build → Variables and secrets**, and add two secrets: `AMO_JWT_ISSUER` (the JWT issuer) and `AMO_JWT_SECRET` (the JWT secret).
+3. Push a change. The build uploads the extension, waits for Mozilla to sign it (usually a minute or two), and serves it at `/push-it-firefox.xpi`.
+
+Notes:
+
+- **Version numbers:** Mozilla accepts each version number once. The pre-commit hook bumps the version on every code commit. If the current version is already signed, the build downloads the existing signed copy instead of uploading again.
+- **Branches:** only the `main` branch is signed. Set `FIREFOX_SIGN_BRANCH` to change it.
+- **Add-on ID:** add-on IDs are unique across Mozilla's site. If `push-it@push-it` is taken, for example by another fork, set `FIREFOX_ADDON_ID` (for example `push-it@yourname`).
+- **Failures don't block deploys:** if signing fails or times out, the build logs a warning and the site offers the unsigned zip.
+- **Locally:** `AMO_JWT_ISSUER=… AMO_JWT_SECRET=… bun run build`.
 
 > In Firefox, clicking **+** to attach a file opens Push It in a tab, because Firefox closes popups when a file picker opens. Pasting a screenshot into the popup still works. If you've revoked the extension's site access, the status line shows **Access needed**. Click it to grant access again.
 

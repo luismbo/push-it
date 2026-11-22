@@ -333,7 +333,9 @@ async function refresh() {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (d?.version && d.version !== extVersion) {
-          updateHint.textContent = `v${d.version} available · reload extension`;
+          updateHint.textContent = IS_FIREFOX
+            ? `v${d.version} available · click to update`
+            : `v${d.version} available · reload extension`;
           updateHint.classList.remove('hidden');
         } else {
           updateHint.classList.add('hidden');
@@ -526,6 +528,13 @@ attachBtn.addEventListener('click', () => {
     return;
   }
   fileInput.click();
+});
+
+// On Firefox, the server may offer a signed .xpi; opening it installs the update in place.
+// Without one, the link just opens the app, whose Settings has the download.
+updateHint.addEventListener('click', () => {
+  if (!IS_FIREFOX || !currentServerUrl) return;
+  chrome.tabs.create({ url: `${new URL(currentServerUrl).origin}/push-it-firefox.xpi`, active: true });
 });
 
 statusText.addEventListener('click', async () => {
