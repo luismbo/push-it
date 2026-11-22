@@ -65,7 +65,7 @@ Nothing runs on your local machine. Open a link on your phone, tap **Share → P
 
 1. Open **Cloudflare Dashboard → Workers & Pages → Create → Import a repository** and select this repo.
 2. Set:
-   - **Build command:** `bun install && bun run build`
+   - **Build command:** `bun run build`
    - **Deploy command:** `bunx wrangler deploy`
 3. Click **Save and Deploy**.
 
