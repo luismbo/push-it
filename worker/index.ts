@@ -6,6 +6,12 @@ export { RoomDO };
 const ROOM_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 const HSTS = 'max-age=31536000';
+const DEFAULT_REPO_URL = 'https://github.com/joaocastilho/push-it';
+
+function isRoomAllowed(env: Env, roomId: string): boolean {
+  const allowed = (env.ALLOWED_ROOM_IDS || '').split(/[\s,]+/).filter(Boolean);
+  return allowed.length === 0 || allowed.includes(roomId);
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -41,6 +47,17 @@ export default {
       const roomId = roomMatch[1];
       if (!ROOM_ID_RE.test(roomId) || roomId === VAPID_DO_NAME) {
         return Response.json({ error: 'Invalid roomId' }, { status: 400 });
+      }
+      if (!isRoomAllowed(env, roomId)) {
+        const repoUrl = env.REPO_URL || DEFAULT_REPO_URL;
+        return Response.json(
+          {
+            error: 'private_server',
+            message: `This Push It server is private. Deploy your own for free: ${repoUrl}`,
+            repoUrl,
+          },
+          { status: 403 },
+        );
       }
       const id = env.ROOMS.idFromName(roomId);
       const stub = env.ROOMS.get(id);

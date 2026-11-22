@@ -73,6 +73,7 @@ export default function App() {
   const [pushBusy, setPushBusy] = createSignal<boolean>(false);
   const [qrDataUrl, setQrDataUrl] = createSignal<string>('');
   const [importInput, setImportInput] = createSignal<string>('');
+  const [privateServer, setPrivateServer] = createSignal<{ repoUrl: string } | null>(null);
   const [toast, setToast] = createSignal<string>('');
   const [popupWarning, setPopupWarning] = createSignal<string>('');
   const [unreadCount, setUnreadCount] = createSignal<number>(0);
@@ -106,10 +107,30 @@ export default function App() {
   });
 
   const statusLabel = createMemo(() => {
+    if (privateServer()) return 'Private server';
     if (wsStatus() === 'connected') return 'Connected';
     if (wsStatus() === 'connecting') return 'Connecting...';
     return 'Offline';
   });
+
+  // The server may restrict which rooms it serves (ALLOWED_ROOM_IDS). Returns false if
+  // this room is refused, in which case the "private server" page is shown instead.
+  async function checkRoomAccess(rid: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/room/${encodeURIComponent(rid)}/status`, { cache: 'no-store' });
+      if (res.status === 403) {
+        const data = (await res.json().catch(() => null)) as { error?: string; repoUrl?: string } | null;
+        if (data?.error === 'private_server') {
+          setPrivateServer({ repoUrl: data.repoUrl || 'https://github.com/joaocastilho/push-it' });
+          return false;
+        }
+      }
+    } catch {
+      // Offline or unreachable: carry on and let the normal reconnect logic handle it.
+    }
+    setPrivateServer(null);
+    return true;
+  }
 
   async function updateBadge(count: number) {
     setUnreadCount(count);
@@ -371,6 +392,8 @@ export default function App() {
         await updateBadge(0);
         scrollToBottom();
 
+        if (!(await checkRoomAccess(rid))) return;
+
         await registerDeviceRecord(rid, activeKey, devId, devName, localOs);
         await refreshDevices(rid, activeKey, devId);
         await hydrateExistingBlobs(existingMsgs, rid, activeKey, devId);
@@ -431,9 +454,9 @@ export default function App() {
 
   // 3. Live connection
   createEffect(
-    () => [roomId(), deviceId(), keyB64()] as const,
-    ([rid, did, k]) => {
-      if (!rid || !did || !k) return;
+    () => [roomId(), deviceId(), keyB64(), privateServer()] as const,
+    ([rid, did, k, blocked]) => {
+      if (!rid || !did || !k || blocked) return;
 
       let ws: WebSocket | null = null;
       let reconnectTimer: number | undefined;
@@ -870,6 +893,7 @@ export default function App() {
     setKeyB64(raw);
     setRoomId(rid);
     setImportInput('');
+    if (!(await checkRoomAccess(rid))) return;
     await registerDeviceRecord(rid, raw, deviceId(), deviceName(), localOs);
     await refreshDevices(rid, raw, deviceId());
     notify('Devices paired!');
@@ -881,6 +905,10 @@ export default function App() {
     const rid = await deriveRoomId(fresh);
     setKeyB64(fresh);
     setRoomId(rid);
+    if (!(await checkRoomAccess(rid))) {
+      notify('This server only allows approved rooms');
+      return;
+    }
     await registerDeviceRecord(rid, fresh, deviceId(), deviceName(), localOs);
     await refreshDevices(rid, fresh, deviceId());
     notify('Created a new pairing code');
@@ -959,6 +987,43 @@ export default function App() {
         <div class="banner warning">{popupWarning()}</div>
       </Show>
 
+      <Show
+        when={!privateServer()}
+        fallback={
+          <main class="settings-page private-server">
+            <section class="card">
+              <h2>🔒 This Push It server is private</h2>
+              <p class="muted">
+                It only works for devices its owner has approved. Push It is free and open source, so
+                you can run your own copy on Cloudflare's free tier in a few minutes.
+              </p>
+              <a class="btn primary" href={privateServer()?.repoUrl} target="_blank" rel="noopener">
+                Get Push It on GitHub →
+              </a>
+            </section>
+            <section class="card">
+              <strong>Got a pair link from the owner?</strong>
+              <div class="import-row">
+                <input
+                  type="text"
+                  placeholder="Paste pair link..."
+                  value={importInput()}
+                  onInput={(e) => setImportInput(e.currentTarget.value)}
+                />
+                <button class="btn secondary" onClick={handleImportKey}>
+                  Pair
+                </button>
+              </div>
+            </section>
+            <section class="card">
+              <span class="muted">
+                Own this server? Add this room ID to <code>ALLOWED_ROOM_IDS</code>:
+              </span>
+              <code class="room-id">{roomId()}</code>
+            </section>
+          </main>
+        }
+      >
       <Show
         when={view() === 'chat'}
         fallback={
@@ -1128,6 +1193,21 @@ export default function App() {
                   Clear
                 </button>
               </div>
+            </section>
+
+            <section class="card">
+              <div class="row between">
+                <div>
+                  <strong>Room ID</strong>
+                  <span class="muted">
+                    Server owners: add this to <code>ALLOWED_ROOM_IDS</code> to make the server private
+                  </span>
+                </div>
+                <button class="btn secondary small" onClick={() => copyToClipboard(roomId(), 'Room ID copied')}>
+                  Copy
+                </button>
+              </div>
+              <code class="room-id">{roomId()}</code>
             </section>
 
             <div class="version-footer">
@@ -1339,6 +1419,7 @@ export default function App() {
             {sending() ? '...' : 'Push It'}
           </button>
         </footer>
+      </Show>
       </Show>
     </div>
   );

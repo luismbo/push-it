@@ -56,6 +56,26 @@ async function hasServerAccess(serverUrl) {
 }
 
 let needsAccess = false;
+let privateRepoUrl = '';
+
+// Servers can restrict which rooms they serve (ALLOWED_ROOM_IDS); they answer
+// 403 { error: 'private_server', repoUrl } for any other room.
+async function checkPrivateServer(serverUrl, keyB64) {
+  try {
+    const rid = await deriveRoomId(keyB64);
+    const res = await fetch(
+      `${new URL(serverUrl).origin}/api/room/${encodeURIComponent(rid)}/status`,
+      { cache: 'no-store' },
+    );
+    if (res.status !== 403) return '';
+    const data = await res.json().catch(() => null);
+    return data?.error === 'private_server'
+      ? data.repoUrl || 'https://github.com/joaocastilho/push-it'
+      : '';
+  } catch {
+    return '';
+  }
+}
 
 let myDeviceId = '';
 let currentDeviceOs = 'windows';
@@ -279,13 +299,24 @@ async function refresh() {
   renderTargetBar();
 
   needsAccess = Boolean(state.paired && currentServerUrl) && !(await hasServerAccess(currentServerUrl));
-  statusText.classList.toggle('action', needsAccess);
-  statusText.title = needsAccess ? `Click to allow access to ${new URL(currentServerUrl).host}` : '';
+  privateRepoUrl =
+    state.paired && !needsAccess && state.status !== 'connected'
+      ? await checkPrivateServer(currentServerUrl, currentKeyB64)
+      : '';
+  statusText.classList.toggle('action', needsAccess || Boolean(privateRepoUrl));
+  statusText.title = privateRepoUrl
+    ? 'This server only serves rooms its owner approved. Click to get your own Push It.'
+    : needsAccess
+      ? `Click to allow access to ${new URL(currentServerUrl).host}`
+      : '';
 
-  statusDot.className = `dot ${state.paired && !needsAccess ? state.status : 'disconnected'}`;
+  const blocked = needsAccess || Boolean(privateRepoUrl);
+  statusDot.className = `dot ${state.paired && !blocked ? state.status : 'disconnected'}`;
   statusText.textContent = !state.paired
     ? 'Not paired'
-    : needsAccess
+    : privateRepoUrl
+      ? 'Private server · get your own'
+      : needsAccess
       ? 'Access needed · click to allow'
       : state.status === 'connected'
       ? 'Connected'
@@ -462,6 +493,11 @@ savePairBtn.addEventListener('click', async () => {
     pairInput.value = '';
     pairBox.classList.add('hidden');
     await chrome.runtime.sendMessage({ type: 'RECONNECT' });
+    if (await checkPrivateServer(parsed.origin, keyB64)) {
+      showToast('This server is private · click the status to learn more');
+      setTimeout(refresh, 0);
+      return;
+    }
     setView(false);
     showToast('Paired!');
     setTimeout(refresh, 600);
@@ -493,6 +529,10 @@ attachBtn.addEventListener('click', () => {
 });
 
 statusText.addEventListener('click', async () => {
+  if (privateRepoUrl) {
+    chrome.tabs.create({ url: privateRepoUrl, active: true });
+    return;
+  }
   if (!needsAccess || !currentServerUrl) return;
   const granted = await chrome.permissions
     .request({ origins: [originPattern(currentServerUrl)] })

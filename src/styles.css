@@ -617,3 +617,15 @@ input:focus {
   cursor: pointer;
   font-size: 0.8rem;
 }
+
+.room-id {
+  font-size: 0.8rem;
+  word-break: break-all;
+  user-select: all;
+  color: var(--text);
+}
+
+.private-server a.btn {
+  text-decoration: none;
+  text-align: center;
+}

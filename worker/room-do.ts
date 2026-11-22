@@ -11,6 +11,10 @@ export interface Env {
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
   VAPID_SUBJECT?: string;
+  /** Comma/space-separated room IDs allowed to use this server. Unset = open to everyone. */
+  ALLOWED_ROOM_IDS?: string;
+  /** Where to send visitors of a private server (defaults to the upstream repo). */
+  REPO_URL?: string;
 }
 
 export interface EncryptedEnvelope {

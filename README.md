@@ -71,6 +71,18 @@ Nothing runs on your local machine. Open a link on your phone, tap **Share → P
 
 ---
 
+## 🔒 Make Your Server Private
+
+By default, anyone who finds your URL can pair their own devices with your server. They can't read your messages, but they use your free-tier quota and storage. To accept only your own devices:
+
+1. Open your Push It URL → **Settings** → **Room ID** → **Copy**. All your paired devices share this one room.
+2. In the Cloudflare dashboard, open your Worker → **Settings → Variables and Secrets → Add**. Choose type **Secret**, name it `ALLOWED_ROOM_IDS`, and paste the room ID. Separate several rooms with commas. From a terminal: `bunx wrangler secret put ALLOWED_ROOM_IDS`.
+3. Requests for any other room now get `403`. Visitors see a page linking to this repo so they can deploy their own; set a `REPO_URL` variable to change the link.
+
+Use a **Secret**, not a plain variable: `wrangler deploy` replaces dashboard variables with the ones in `wrangler.jsonc`, but leaves secrets alone. **Settings → New Code** creates a new room, so add its ID to the list before switching.
+
+---
+
 ## 🧩 Install the Browser Extension
 
 ### Chromium (Chrome, Edge, Brave, Vivaldi, …)
