@@ -6,7 +6,7 @@ export { RoomDO };
 const ROOM_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 const HSTS = 'max-age=31536000';
-const DEFAULT_REPO_URL = 'https://github.com/joaocastilho/push-it';
+const DEFAULT_REPO_URL = 'https://github.com/luismbo/push-it';
 
 function isRoomAllowed(env: Env, roomId: string): boolean {
   const allowed = (env.ALLOWED_ROOM_IDS || '').split(/[\s,]+/).filter(Boolean);

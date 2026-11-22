@@ -70,7 +70,7 @@ async function checkPrivateServer(serverUrl, keyB64) {
     if (res.status !== 403) return '';
     const data = await res.json().catch(() => null);
     return data?.error === 'private_server'
-      ? data.repoUrl || 'https://github.com/joaocastilho/push-it'
+      ? data.repoUrl || 'https://github.com/luismbo/push-it'
       : '';
   } catch {
     return '';

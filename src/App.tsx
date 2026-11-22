@@ -121,7 +121,7 @@ export default function App() {
       if (res.status === 403) {
         const data = (await res.json().catch(() => null)) as { error?: string; repoUrl?: string } | null;
         if (data?.error === 'private_server') {
-          setPrivateServer({ repoUrl: data.repoUrl || 'https://github.com/joaocastilho/push-it' });
+          setPrivateServer({ repoUrl: data.repoUrl || 'https://github.com/luismbo/push-it' });
           return false;
         }
       }

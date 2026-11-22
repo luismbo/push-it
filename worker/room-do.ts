@@ -13,7 +13,7 @@ export interface Env {
   VAPID_SUBJECT?: string;
   /** Comma/space-separated room IDs allowed to use this server. Unset = open to everyone. */
   ALLOWED_ROOM_IDS?: string;
-  /** Where to send visitors of a private server (defaults to the upstream repo). */
+  /** Where to send visitors of a private server (defaults to github.com/luismbo/push-it). */
   REPO_URL?: string;
 }
 
