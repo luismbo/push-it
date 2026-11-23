@@ -137,11 +137,42 @@ function escapeHtml(str) {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (event.request.method === 'GET' && url.pathname === '/share') {
-    event.respondWith(handleSilentShare(url));
+    event.respondWith(handleSilentShare(url, event));
   }
 });
 
-async function handleSilentShare(url) {
+const SHARE_NOTIF_TAG = 'push-it-share-result';
+const SHARE_NOTIF_MS = 4000;
+
+// Android has no toast API for web apps, so the closest thing is a quiet notification that
+// removes itself after a few seconds. Returns false when notifications aren't allowed.
+async function showShareResult(event, title, body, autoClose) {
+  if (self.Notification?.permission !== 'granted') return false;
+  try {
+    await self.registration.showNotification(title, {
+      body,
+      icon: '/icon.svg',
+      badge: '/icon.svg',
+      tag: SHARE_NOTIF_TAG,
+      renotify: true,
+      silent: true,
+      data: { type: 'app' },
+    });
+  } catch {
+    return false;
+  }
+  if (autoClose) {
+    event.waitUntil(
+      new Promise((resolve) => setTimeout(resolve, SHARE_NOTIF_MS))
+        .then(() => self.registration.getNotifications({ tag: SHARE_NOTIF_TAG }))
+        .then((list) => list.forEach((n) => n.close()))
+        .catch(() => {}),
+    );
+  }
+  return true;
+}
+
+async function handleSilentShare(url, event) {
   const sharedUrl = (url.searchParams.get('url') || '').trim();
   const sharedText = (url.searchParams.get('text') || '').trim();
   const sharedTitle = (url.searchParams.get('title') || '').trim() || undefined;
@@ -149,6 +180,7 @@ async function handleSilentShare(url) {
 
   let statusMsg = 'Sent';
   let ok = false;
+  let queued = false;
 
   try {
     const [keyB64, deviceId, deviceName, deviceOs] = await Promise.all([
@@ -184,6 +216,8 @@ async function handleSilentShare(url) {
 
       if (res.ok) {
         ok = true;
+        const result = await res.json().catch(() => ({}));
+        queued = result.delivered === false && !result.wsDelivered && !result.pushSent;
         const item = {
           id: envelope.id,
           senderId: deviceId,
@@ -194,6 +228,7 @@ async function handleSilentShare(url) {
           content,
           title: sharedTitle,
           direction: 'out',
+          status: result.delivered ? 'delivered' : 'queued',
         };
         await saveMessage(item);
 
@@ -209,6 +244,19 @@ async function handleSilentShare(url) {
     statusMsg = 'Send failed';
   }
 
+  const notified = content
+    ? await showShareResult(
+        event,
+        ok ? (queued ? 'Queued' : 'Pushed') : 'Push It could not send that',
+        ok
+          ? `${sharedTitle || content.slice(0, 120)}${queued ? ' · your devices get it once they are online' : ''}`
+          : `${statusMsg}. Open Push It and try again.`,
+        ok,
+      )
+    : false;
+  // With no notification, keep the in-window confirmation up long enough to read.
+  const closeDelay = notified ? 0 : 1200;
+
   const html = `<!doctype html>
 <html>
 <head>
@@ -221,10 +269,12 @@ async function handleSilentShare(url) {
 </style>
 </head>
 <body>
-  <div class="pill">${ok ? '✓ Pushed' : escapeHtml(statusMsg)}</div>
+  <div class="pill">${ok ? (queued ? '✓ Queued' : '✓ Pushed') : escapeHtml(statusMsg)}</div>
   <script>
-    window.close();
-    setTimeout(() => { window.close(); if (history.length > 1) history.back(); }, 250);
+    setTimeout(() => {
+      window.close();
+      setTimeout(() => { window.close(); if (history.length > 1) history.back(); }, 250);
+    }, ${closeDelay});
   </script>
 </body>
 </html>`;
