@@ -9,7 +9,7 @@ Nothing runs on your local machine. Open a link on your phone, tap **Share → P
 ## ✨ What It Does
 
 - 🔐 **End-to-End Encrypted:** Every link, message, device name, photo, and file is encrypted in your browser with **AES-GCM 256-bit** using the Web Crypto API. Your key lives in the pairing QR code (`#key=...`) and never touches Cloudflare.
-- 💬 **Device-to-Device Chat:** Clean chat-style feed with **OS icons**, customizable **device names**, targeted sending (**All** or specific devices), and live delivery checkmarks (`✓` queued / `✓✓` delivered).
+- 💬 **Device-to-Device Chat:** Clean chat-style feed with **OS icons**, customizable **device names**, targeted sending (**All** or specific devices), live delivery checkmarks (`✓` queued / `✓✓` delivered), and **archive or delete** (with undo) that syncs to all your devices.
 - 📱 **Silent Android Share Sheet:** Install as a PWA on Android and share from any app — the Service Worker encrypts and pushes in the background, then closes itself right back to what you were doing.
 - 🧩 **Browser Extension (`extension/`):** Works in **Firefox** and any Chromium-based desktop browser with no pinned tab and no Google push services required. Can open incoming links in new tabs automatically (off by default), shows native OS notifications with an unread red badge counter, pushes the active tab in one click, and adds a right-click **Push It → Device** menu.
 - 📎 **Long Notes, Photos & Files:** Paste screenshots (`Ctrl+V`), drag-and-drop, or attach files up to **7.5 MB** (and long notes of any length). Blobs are encrypted client-side and auto-deleted on Cloudflare as soon as every recipient downloads them.

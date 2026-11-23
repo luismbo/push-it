@@ -15,6 +15,9 @@ import {
 
 const KEEPALIVE_ALARM = 'push-it-keepalive';
 const MAX_HISTORY = 40;
+const OP_BATCH_SIZE = 40;
+const OP_LOG_MAX = 1000;
+const OP_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const LONG_TEXT_THRESHOLD = 1800;
 const LOCAL_OS = detectOs();
 
@@ -82,12 +85,134 @@ function setStatus(status) {
   updateBadge(status);
 }
 
+/** Keeps the newest MAX_HISTORY feed items and the newest MAX_HISTORY archived ones. */
+function trimHistory(list) {
+  const feed = list.filter((m) => !m.archivedAt).slice(-MAX_HISTORY);
+  const archived = list.filter((m) => m.archivedAt).slice(-MAX_HISTORY);
+  const keep = new Set([...feed, ...archived]);
+  return list.filter((m) => keep.has(m));
+}
+
+/** Stores a new item. Returns true when it should notify (new and not archived elsewhere). */
 async function appendHistory(item) {
   const { history } = await getConfig();
   if (history.some((m) => m.id === item.id)) return false;
-  const next = [...history, item].slice(-MAX_HISTORY);
-  await chrome.storage.local.set({ history: next });
-  return true;
+  const kept = reconcile(await getOpLog(), item);
+  if (!kept) return false;
+  await chrome.storage.local.set({ history: trimHistory([...history, kept]) });
+  return !kept.archivedAt;
+}
+
+// ---- Archive / delete ops, mirroring src/lib/ops.ts in the web app ----
+
+async function getOpLog() {
+  const { messageOps } = await chrome.storage.local.get('messageOps');
+  return messageOps && typeof messageOps === 'object' ? messageOps : {};
+}
+
+function parseOp(value) {
+  if (!value || typeof value !== 'object') return null;
+  if (value.op !== 'archive' && value.op !== 'unarchive' && value.op !== 'delete') return null;
+  if (!Array.isArray(value.ids) || typeof value.at !== 'number') return null;
+  const ids = value.ids.filter((id) => typeof id === 'string' && OP_ID_RE.test(id));
+  return ids.length ? { op: value.op, ids, at: value.at } : null;
+}
+
+/** Records op in log (mutating it); delete always wins, otherwise the later op wins. */
+function mergeOp(log, op) {
+  const changed = [];
+  for (const id of op.ids) {
+    const prev = log[id];
+    if (prev?.op === 'delete') continue;
+    if (op.op !== 'delete' && prev && prev.at >= op.at) continue;
+    log[id] = { op: op.op, at: op.at };
+    changed.push(id);
+  }
+  const ids = Object.keys(log);
+  if (ids.length > OP_LOG_MAX) {
+    ids.sort((a, b) => log[a].at - log[b].at);
+    for (const id of ids.slice(0, ids.length - OP_LOG_MAX)) delete log[id];
+  }
+  return changed;
+}
+
+function reconcile(log, item) {
+  const rec = log[item.id];
+  if (!rec) return item;
+  if (rec.op === 'delete') return null;
+  if (rec.op === 'archive') return { ...item, archivedAt: rec.at };
+  const { archivedAt: _drop, ...rest } = item;
+  return rest;
+}
+
+async function applyOp(op) {
+  const log = await getOpLog();
+  const changed = new Set(mergeOp(log, op));
+  const { history } = await getConfig();
+  const next = [];
+  for (const item of history) {
+    if (!changed.has(item.id)) {
+      next.push(item);
+      continue;
+    }
+    const kept = reconcile(log, item);
+    if (kept) next.push(kept);
+  }
+  await chrome.storage.local.set({ messageOps: log, history: trimHistory(next) });
+}
+
+async function receiveOp(keyB64, envelope) {
+  try {
+    const op = parseOp(await decryptJson(keyB64, envelope.iv, envelope.ciphertext));
+    if (op) await applyOp(op);
+  } catch {
+    // ignore ops encrypted with another key
+  }
+}
+
+async function performOp(kind, ids) {
+  if (!Array.isArray(ids) || !ids.length) return;
+  const at = Date.now();
+  await applyOp({ op: kind, ids, at });
+  const cfg = await getConfig();
+  if (!cfg.keyB64) return;
+  const envelopes = [];
+  for (let i = 0; i < ids.length; i += OP_BATCH_SIZE) {
+    const enc = await encryptJson(cfg.keyB64, { op: kind, ids: ids.slice(i, i + OP_BATCH_SIZE), at });
+    envelopes.push({ id: crypto.randomUUID(), senderId: cfg.deviceId, ...enc, ts: Date.now() });
+  }
+  const { opOutbox } = await chrome.storage.local.get('opOutbox');
+  await chrome.storage.local.set({ opOutbox: [...(Array.isArray(opOutbox) ? opOutbox : []), ...envelopes] });
+  await flushOpOutbox();
+}
+
+let flushingOps = false;
+
+/** Sends queued ops in order; whatever can't be sent now waits for the next reconnect. */
+async function flushOpOutbox() {
+  if (flushingOps) return;
+  const { serverUrl, keyB64 } = await getConfig();
+  if (!serverUrl || !keyB64) return;
+  flushingOps = true;
+  try {
+    const roomId = await deriveRoomId(keyB64);
+    const base = new URL(serverUrl);
+    for (;;) {
+      const { opOutbox } = await chrome.storage.local.get('opOutbox');
+      const next = Array.isArray(opOutbox) ? opOutbox[0] : undefined;
+      if (!next) break;
+      const res = await fetch(`${base.origin}/api/room/${encodeURIComponent(roomId)}/op`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(next),
+      }).catch(() => null);
+      if (!res || res.status >= 500 || res.status === 429) break;
+      const current = (await chrome.storage.local.get('opOutbox')).opOutbox || [];
+      await chrome.storage.local.set({ opOutbox: current.filter((e) => e.id !== next.id) });
+    }
+  } finally {
+    flushingOps = false;
+  }
 }
 
 async function markDeliveredInHistory(ids) {
@@ -230,10 +355,10 @@ async function syncPending() {
     );
     if (!res.ok) return;
     const data = await res.json();
-    if (!data.messages?.length) return;
+    if (!data.messages?.length && !data.ops?.length) return;
 
     let maxTs = cfg.lastSeenTs;
-    for (const env of data.messages) {
+    for (const env of data.messages || []) {
       try {
         const decrypted = await decryptEnvelope(cfg.keyB64, env);
         let item = {
@@ -262,6 +387,10 @@ async function syncPending() {
       } catch {
         // ignore unreadable
       }
+    }
+
+    for (const env of data.ops || []) {
+      await receiveOp(cfg.keyB64, env);
     }
 
     if (maxTs > cfg.lastSeenTs) {
@@ -340,6 +469,7 @@ async function connect() {
       await registerDeviceRecord(deviceId, deviceName, deviceOs);
       await refreshDevices();
       await syncPending();
+      await flushOpOutbox();
       pingTimer = setInterval(() => {
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send('ping');
@@ -359,6 +489,13 @@ async function connect() {
         }
         if (parsed.type === 'delivered' && Array.isArray(parsed.ids)) {
           await markDeliveredInHistory(parsed.ids);
+          return;
+        }
+        if (parsed.type === 'op' && parsed.envelope) {
+          const opCfg = await getConfig();
+          if (opCfg.keyB64 && parsed.envelope.senderId !== opCfg.deviceId) {
+            await receiveOp(opCfg.keyB64, parsed.envelope);
+          }
           return;
         }
         if (parsed.type !== 'message' || !parsed.envelope) return;
@@ -669,6 +806,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         history: cfg.history,
         devices,
       });
+      return;
+    }
+
+    if (msg.type === 'MESSAGE_OP') {
+      if (msg.op !== 'archive' && msg.op !== 'unarchive' && msg.op !== 'delete') {
+        sendResponse({ ok: false, error: 'Unknown op' });
+        return;
+      }
+      await performOp(msg.op, msg.ids);
+      sendResponse({ ok: true });
       return;
     }
 

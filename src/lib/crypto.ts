@@ -137,6 +137,16 @@ export async function encryptPayload(
   };
 }
 
+/** Wraps an archive/delete op in an envelope for the /op route. */
+export async function encryptOp(
+  keyB64: string,
+  senderId: string,
+  op: unknown,
+): Promise<EncryptedEnvelope> {
+  const { iv, ciphertext } = await encryptJson(keyB64, op);
+  return { id: crypto.randomUUID(), senderId, iv, ciphertext, ts: Date.now() };
+}
+
 export async function decryptEnvelope(
   keyB64: string,
   envelope: EncryptedEnvelope,

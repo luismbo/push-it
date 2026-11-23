@@ -41,7 +41,7 @@ export default {
     }
 
     const roomMatch = url.pathname.match(
-      /^\/api\/room\/([^/]+)\/(ws|send|ack|pending|devices|subscribe|status|blob\/[A-Za-z0-9_-]{8,64})$/,
+      /^\/api\/room\/([^/]+)\/(ws|send|op|ack|pending|devices|subscribe|status|blob\/[A-Za-z0-9_-]{8,64})$/,
     );
     if (roomMatch) {
       const roomId = roomMatch[1];

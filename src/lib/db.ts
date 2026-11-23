@@ -1,5 +1,6 @@
 import type { PayloadType } from './crypto';
 import type { DeviceOs } from './device';
+import { mergeOp, reconcile, type MessageOp, type OpLog } from './ops';
 
 export interface StoredMessage {
   id: string;
@@ -18,6 +19,8 @@ export interface StoredMessage {
   fileName?: string;
   mimeType?: string;
   fileSize?: number;
+  /** Set while the message sits in the Archived tab. */
+  archivedAt?: number;
 }
 
 export interface StoredBlob {
@@ -100,6 +103,7 @@ export async function markMessagesDelivered(ids: string[]): Promise<void> {
   });
 }
 
+/** The newest `limit` feed messages plus every archived one, oldest first. */
 export async function listMessages(limit = 60): Promise<StoredMessage[]> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
@@ -108,10 +112,64 @@ export async function listMessages(limit = 60): Promise<StoredMessage[]> {
     req.onsuccess = () => {
       const all = (req.result as StoredMessage[]) || [];
       all.sort((a, b) => a.ts - b.ts);
-      resolve(all.slice(-limit));
+      resolve(trimFeed(all, limit));
     };
     req.onerror = () => reject(req.error);
   });
+}
+
+/** Keeps every archived message and only the newest `limit` feed messages. */
+export function trimFeed(list: StoredMessage[], limit = 60): StoredMessage[] {
+  const feedCount = list.filter((m) => !m.archivedAt).length;
+  let skip = Math.max(0, feedCount - limit);
+  if (!skip) return list;
+  return list.filter((m) => m.archivedAt || skip-- <= 0);
+}
+
+const OP_LOG_KEY = 'messageOps';
+
+/**
+ * Applies the op log to an incoming message before it is stored. Returns null when the
+ * message was already deleted on another device.
+ */
+export async function reconcileIncoming(msg: StoredMessage): Promise<StoredMessage | null> {
+  const log = (await kvGet<OpLog>(OP_LOG_KEY)) || {};
+  return reconcile(log, msg);
+}
+
+/**
+ * Records an op and updates or removes the stored messages (and their files) it changes.
+ * Returns the ids that changed.
+ */
+export async function applyMessageOp(op: MessageOp): Promise<string[]> {
+  const log = (await kvGet<OpLog>(OP_LOG_KEY)) || {};
+  const changed = mergeOp(log, op);
+  await kvSet(OP_LOG_KEY, log);
+  if (!changed.length) return changed;
+
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(['messages', 'blobs'], 'readwrite');
+    const messages = tx.objectStore('messages');
+    const blobs = tx.objectStore('blobs');
+    for (const id of changed) {
+      const req = messages.get(id);
+      req.onsuccess = () => {
+        const msg = req.result as StoredMessage | undefined;
+        if (!msg) return;
+        if (op.op === 'delete') {
+          messages.delete(id);
+          if (msg.blobId) blobs.delete(msg.blobId);
+          return;
+        }
+        const next = reconcile(log, msg);
+        if (next) messages.put(next);
+      };
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  return changed;
 }
 
 export async function saveBlob(blob: StoredBlob): Promise<void> {

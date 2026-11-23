@@ -296,11 +296,15 @@ h2 {
 .bubble-row {
   display: flex;
   width: 100%;
+  position: relative;
+  touch-action: pan-y;
 }
 
 .bubble {
+  position: relative;
   width: 100%;
   min-width: 0;
+  transition: transform 0.18s ease;
   border-radius: 10px;
   padding: 9px 12px;
   display: flex;
@@ -676,4 +680,240 @@ input:focus {
 
 .install-steps code {
   user-select: all;
+}
+
+/* ---- Archive / delete ---- */
+
+.feedbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.seg {
+  display: inline-flex;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px;
+}
+
+.seg button {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  padding: 4px 12px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.seg button.active {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.seg-count {
+  font-variant-numeric: tabular-nums;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 0 6px;
+  font-size: 0.7rem;
+}
+
+.text-btn {
+  background: none;
+  border: 0;
+  color: var(--link);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 2px;
+}
+
+.text-btn:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.text-btn.danger {
+  color: var(--danger);
+}
+
+.msg-icon {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
+
+.actions-spacer {
+  flex: 1;
+}
+
+.bubble-actions {
+  align-items: center;
+}
+
+.bubble-actions .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.msg-icon-btn {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  width: 28px;
+  height: 24px;
+  border-radius: 6px;
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.msg-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.msg-icon-btn.danger:hover {
+  color: var(--danger);
+}
+
+.swipe-reveal {
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--on-accent);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-right: 18px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.bubble.dragging {
+  transition: none;
+}
+
+.chat-stream.selecting .bubble {
+  cursor: pointer;
+  user-select: none;
+}
+
+.chat-stream.selecting .bubble-actions {
+  display: none;
+}
+
+.bubble.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.select-check {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1.5px solid var(--muted);
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.bubble.selected .select-check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.bubble.selected .select-check::after {
+  content: '';
+  width: 7px;
+  height: 4px;
+  border: solid var(--on-accent);
+  border-width: 0 0 2px 2px;
+  transform: rotate(-45deg) translate(1px, -1px);
+}
+
+.bulk-bar,
+.archive-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.archive-footer {
+  justify-content: center;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+}
+
+.bulk-count {
+  flex: 1;
+  font-weight: 600;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.bulk-bar .btn,
+.archive-footer .btn {
+  gap: 6px;
+}
+
+.btn.danger {
+  background: rgba(242, 139, 130, 0.12);
+  color: var(--danger);
+  border: 1px solid rgba(242, 139, 130, 0.35);
+}
+
+.undo-toast {
+  position: absolute;
+  left: 50%;
+  bottom: calc(76px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 6px 10px 6px 16px;
+  font-size: 0.82rem;
+  white-space: nowrap;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.undo-toast .text-btn {
+  color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bubble {
+    transition: none;
+  }
 }

@@ -295,6 +295,12 @@ async function handlePush(event) {
     direction: 'in',
   };
 
+  // Another device may already have archived or deleted this message (see src/lib/ops.ts).
+  const opLog = (await kvGet('messageOps')) || {};
+  const opRec = opLog[item.id];
+  if (opRec && opRec.op === 'delete') return;
+  if (opRec && opRec.op === 'archive') item.archivedAt = opRec.at;
+
   await saveMessage(item);
   const prevLastSeen = (await kvGet('lastSeenTs')) || 0;
   if (item.ts > prevLastSeen) {
@@ -323,6 +329,8 @@ async function handlePush(event) {
   for (const client of windowClients) {
     client.postMessage({ type: 'PUSH_RECEIVED', item });
   }
+
+  if (item.archivedAt) return;
 
   const hasVisibleClient = windowClients.some((c) => c.visibilityState === 'visible');
   if (hasVisibleClient) return;

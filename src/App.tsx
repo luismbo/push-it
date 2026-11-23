@@ -9,6 +9,7 @@ import {
   detectPayloadType,
   encryptBytes,
   encryptJson,
+  encryptOp,
   encryptPayload,
   formatFileSize,
   generateRawKeyB64,
@@ -18,16 +19,20 @@ import {
   type EncryptedEnvelope,
 } from './lib/crypto';
 import {
+  applyMessageOp,
   clearMessages,
   getBlob,
   kvGet,
   kvSet,
   listMessages,
   markMessagesDelivered,
+  reconcileIncoming,
   saveBlob,
   saveMessage,
+  trimFeed,
   type StoredMessage,
 } from './lib/db';
+import { chunkIds, parseOp, type MessageOp, type MessageOpKind } from './lib/ops';
 import { defaultDeviceName, detectOs, normalizeOs, type DeviceOs } from './lib/device';
 import {
   getCurrentPushSubscription,
@@ -47,6 +52,33 @@ interface PairedDevice {
 
 const MAX_FILE_BYTES = 7.5 * 1024 * 1024;
 const LONG_TEXT_THRESHOLD = 1800;
+const UNDO_MS = 5000;
+const SWIPE_ARCHIVE_PX = 90;
+
+function ArchiveIcon() {
+  return (
+    <svg viewBox="0 0 24 24" class="msg-icon" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="5" rx="1" />
+      <path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" class="msg-icon" aria-hidden="true">
+      <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12M9 7V4h6v3" />
+    </svg>
+  );
+}
+
+function RestoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" class="msg-icon" aria-hidden="true">
+      <path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" />
+    </svg>
+  );
+}
 
 export default function App() {
   const localOs: DeviceOs = detectOs();
@@ -87,11 +119,21 @@ export default function App() {
   const [popupWarning, setPopupWarning] = createSignal<string>('');
   const [unreadCount, setUnreadCount] = createSignal<number>(0);
   const [serverVersion, setServerVersion] = createSignal<string | null>(null);
+  const [feedTab, setFeedTab] = createSignal<'feed' | 'archived'>('feed');
+  const [selecting, setSelecting] = createSignal(false);
+  const [selectedIds, setSelectedIds] = createSignal<string[]>([]);
+  const [confirmDeleteAll, setConfirmDeleteAll] = createSignal(false);
+  // Messages deleted locally but still within their undo window.
+  const [hiddenIds, setHiddenIds] = createSignal<string[]>([]);
+  const [undoToast, setUndoToast] = createSignal<{ text: string; undo: () => void } | null>(null);
   const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.0.0';
 
   let chatEndEl: HTMLDivElement | undefined;
   let fileInputEl: HTMLInputElement | undefined;
   let toastTimer: number | undefined;
+  let undoTimer: number | undefined;
+  let pendingDelete: { ids: string[]; timer: number } | null = null;
+  let flushingOps = false;
 
   function notify(msg: string) {
     setToast(msg);
@@ -107,6 +149,20 @@ export default function App() {
 
   const otherDevices = createMemo(() =>
     devices().filter((d) => d.deviceId !== deviceId()),
+  );
+
+  const visibleMessages = createMemo(() => {
+    const hidden = new Set(hiddenIds());
+    return messages().filter((m) => !hidden.has(m.id));
+  });
+  const feedMessages = createMemo(() => visibleMessages().filter((m) => !m.archivedAt));
+  const archivedMessages = createMemo(() =>
+    visibleMessages()
+      .filter((m) => m.archivedAt)
+      .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0)),
+  );
+  const shownMessages = createMemo(() =>
+    feedTab() === 'archived' ? archivedMessages() : feedMessages(),
   );
 
   const pairUrl = createMemo(() => {
@@ -280,11 +336,11 @@ export default function App() {
         `/api/room/${encodeURIComponent(rid)}/pending?deviceId=${encodeURIComponent(myId)}&since=${since}`,
       );
       if (!res.ok) return;
-      const data = (await res.json()) as { messages: EncryptedEnvelope[] };
-      if (!data.messages?.length) return;
+      const data = (await res.json()) as { messages?: EncryptedEnvelope[]; ops?: EncryptedEnvelope[] };
+      if (!data.messages?.length && !data.ops?.length) return;
 
       let maxTs = since;
-      for (const env of data.messages) {
+      for (const env of data.messages ?? []) {
         try {
           const decrypted = await decryptEnvelope(k, env);
           let item: StoredMessage = {
@@ -305,16 +361,23 @@ export default function App() {
             direction: 'in',
           };
           if (item.ts > maxTs) maxTs = item.ts;
+          const kept = await reconcileIncoming(item);
+          if (!kept) continue;
+          item = kept;
           const existed = messages().some((m) => m.id === item.id);
           await saveMessage(item);
           addOrUpdateMessage(item);
           item = await ensureBlobHydrated(item, rid, k, myId);
-          if (!existed) {
+          if (!existed && !item.archivedAt) {
             handleIncomingAction(item);
           }
         } catch {
           // ignore
         }
+      }
+
+      for (const env of data.ops ?? []) {
+        await receiveOp(k, env);
       }
 
       if (maxTs > since) {
@@ -350,6 +413,7 @@ export default function App() {
         navigator.serviceWorker.addEventListener('message', onSwMessage);
       }
       document.addEventListener('visibilitychange', onVisibility);
+      window.addEventListener('pagehide', commitPendingDelete);
 
       (async () => {
         await registerServiceWorker().catch(() => {});
@@ -434,6 +498,7 @@ export default function App() {
           navigator.serviceWorker.removeEventListener('message', onSwMessage);
         }
         document.removeEventListener('visibilitychange', onVisibility);
+        window.removeEventListener('pagehide', commitPendingDelete);
       };
     },
   );
@@ -483,6 +548,7 @@ export default function App() {
           setWsStatus('connected');
           refreshDevices(rid, k, did);
           syncPending(rid, k, did);
+          flushOpOutbox(rid);
           pingTimer = window.setInterval(() => {
             if (ws && ws.readyState === WebSocket.OPEN) ws.send('ping');
           }, 25000);
@@ -508,6 +574,10 @@ export default function App() {
               await markMessagesDelivered(parsed.ids);
               return;
             }
+            if (parsed.type === 'op' && parsed.envelope) {
+              if (parsed.envelope.senderId !== did) await receiveOp(k, parsed.envelope);
+              return;
+            }
             if (parsed.type !== 'message' || !parsed.envelope) return;
             if (parsed.envelope.senderId === did) return;
 
@@ -530,10 +600,14 @@ export default function App() {
               direction: 'in',
             };
 
-            await saveMessage(item);
             await kvSet('lastSeenTs', item.ts);
+            const kept = await reconcileIncoming(item);
+            if (!kept) return;
+            item = kept;
+            await saveMessage(item);
             addOrUpdateMessage(item);
             item = await ensureBlobHydrated(item, rid, k, did);
+            if (item.archivedAt) return;
 
             if (document.visibilityState !== 'visible') {
               await updateBadge(unreadCount() + 1);
@@ -572,9 +646,153 @@ export default function App() {
   function addOrUpdateMessage(item: StoredMessage) {
     setMessages((prev) => {
       if (prev.some((m) => m.id === item.id)) return prev;
-      return [...prev, item].slice(-60);
+      return trimFeed([...prev, item]);
     });
-    scrollToBottom();
+    if (!item.archivedAt) scrollToBottom();
+  }
+
+  // ---- Archive / delete, synced to the other devices through /op ----
+
+  async function applyOpLocally(op: MessageOp) {
+    const changed = new Set(await applyMessageOp(op));
+    if (!changed.size) return;
+    if (op.op === 'delete') {
+      const urls = blobUrls();
+      for (const m of messages()) {
+        if (changed.has(m.id) && m.blobId && urls[m.blobId]) URL.revokeObjectURL(urls[m.blobId]);
+      }
+      setMessages((prev) => prev.filter((m) => !changed.has(m.id)));
+    } else {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (!changed.has(m.id)) return m;
+          if (op.op === 'archive') return { ...m, archivedAt: op.at };
+          const { archivedAt: _drop, ...rest } = m;
+          return rest;
+        }),
+      );
+    }
+    setSelectedIds((prev) => prev.filter((id) => !changed.has(id)));
+  }
+
+  async function receiveOp(k: string, env: EncryptedEnvelope) {
+    try {
+      const op = parseOp(await decryptJson(k, env.iv, env.ciphertext));
+      if (op) await applyOpLocally(op);
+    } catch {
+      // Ignore ops encrypted with another key
+    }
+  }
+
+  async function performOp(kind: MessageOpKind, ids: string[]) {
+    if (!ids.length) return;
+    const at = Date.now();
+    await applyOpLocally({ op: kind, ids, at });
+    const k = keyB64();
+    const did = deviceId();
+    if (!k || !did) return;
+    const envs = await Promise.all(
+      chunkIds(ids).map((chunk) => encryptOp(k, did, { op: kind, ids: chunk, at })),
+    );
+    const outbox = (await kvGet<EncryptedEnvelope[]>('opOutbox')) || [];
+    await kvSet('opOutbox', [...outbox, ...envs]);
+    await flushOpOutbox();
+  }
+
+  /** Sends queued ops in order; whatever can't be sent now waits for the next reconnect. */
+  async function flushOpOutbox(rid = roomId()) {
+    if (flushingOps || !rid) return;
+    flushingOps = true;
+    try {
+      for (;;) {
+        const next = ((await kvGet<EncryptedEnvelope[]>('opOutbox')) || [])[0];
+        if (!next) break;
+        const res = await fetch(`/api/room/${encodeURIComponent(rid)}/op`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(next),
+          keepalive: true,
+        }).catch(() => null);
+        // Offline or a server hiccup: keep it for later. Other errors would never succeed.
+        if (!res || res.status >= 500 || res.status === 429) break;
+        const current = (await kvGet<EncryptedEnvelope[]>('opOutbox')) || [];
+        await kvSet('opOutbox', current.filter((e) => e.id !== next.id));
+      }
+    } finally {
+      flushingOps = false;
+    }
+  }
+
+  function showUndo(text: string, undo: () => void) {
+    // A new toast takes away the previous one's Undo, so a pending delete happens now.
+    commitPendingDelete();
+    setUndoToast({ text, undo });
+    if (undoTimer) window.clearTimeout(undoTimer);
+    undoTimer = window.setTimeout(() => setUndoToast(null), UNDO_MS);
+  }
+
+  function runUndo() {
+    const t = undoToast();
+    if (undoTimer) window.clearTimeout(undoTimer);
+    setUndoToast(null);
+    t?.undo();
+  }
+
+  const countLabel = (n: number) => (n === 1 ? '' : ` ${n} messages`);
+
+  function archiveIds(ids: string[]) {
+    if (!ids.length) return;
+    performOp('archive', ids);
+    showUndo(`Archived${countLabel(ids.length)}`, () => performOp('unarchive', ids));
+  }
+
+  function restoreIds(ids: string[]) {
+    if (!ids.length) return;
+    performOp('unarchive', ids);
+    showUndo(`Restored${countLabel(ids.length)} to the feed`, () => performOp('archive', ids));
+  }
+
+  function deleteIds(ids: string[]) {
+    if (!ids.length) return;
+    showUndo(`Deleted${countLabel(ids.length)}`, () => {
+      if (pendingDelete?.ids !== ids) return;
+      window.clearTimeout(pendingDelete.timer);
+      pendingDelete = null;
+      setHiddenIds((prev) => prev.filter((id) => !ids.includes(id)));
+    });
+    setHiddenIds((prev) => [...prev, ...ids]);
+    pendingDelete = { ids, timer: window.setTimeout(commitPendingDelete, UNDO_MS) };
+  }
+
+  function commitPendingDelete() {
+    if (!pendingDelete) return;
+    const { ids, timer } = pendingDelete;
+    pendingDelete = null;
+    window.clearTimeout(timer);
+    performOp('delete', ids).finally(() =>
+      setHiddenIds((prev) => prev.filter((id) => !ids.includes(id))),
+    );
+  }
+
+  function switchFeedTab(tab: 'feed' | 'archived') {
+    setFeedTab(tab);
+    setSelecting(false);
+    setSelectedIds([]);
+    setConfirmDeleteAll(false);
+    if (tab === 'feed') scrollToBottom();
+  }
+
+  function toggleSelected(id: string) {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  function runBulk(action: 'archive' | 'restore' | 'delete') {
+    const ids = selectedIds();
+    setSelecting(false);
+    setSelectedIds([]);
+    if (action === 'archive') archiveIds(ids);
+    else if (action === 'restore') restoreIds(ids);
+    else deleteIds(ids);
   }
 
   function handleIncomingAction(item: StoredMessage) {
@@ -1310,16 +1528,57 @@ export default function App() {
           </main>
         }
       >
-        <main class="chat-stream">
+        <div class="feedbar">
+          <div class="seg" role="tablist">
+            <button
+              role="tab"
+              aria-selected={feedTab() === 'feed' ? 'true' : 'false'}
+              class={feedTab() === 'feed' ? 'active' : ''}
+              onClick={() => switchFeedTab('feed')}
+            >
+              Feed
+            </button>
+            <button
+              role="tab"
+              aria-selected={feedTab() === 'archived' ? 'true' : 'false'}
+              class={feedTab() === 'archived' ? 'active' : ''}
+              onClick={() => switchFeedTab('archived')}
+            >
+              Archived
+              <Show when={archivedMessages().length > 0}>
+                <span class="seg-count">{archivedMessages().length}</span>
+              </Show>
+            </button>
+          </div>
+          <button
+            class="text-btn"
+            disabled={!selecting() && shownMessages().length === 0}
+            onClick={() => {
+              setSelecting(!selecting());
+              setSelectedIds([]);
+            }}
+          >
+            {selecting() ? 'Done' : 'Select'}
+          </button>
+        </div>
+
+        <main class={`chat-stream ${selecting() ? 'selecting' : ''}`}>
           <For
-            each={messages()}
+            each={shownMessages()}
             fallback={
-              <div class="empty">
-                <p>Nothing pushed yet.</p>
-                <p class="muted">
-                  Send a link, note, or photo below—or share straight from Android’s Share menu.
-                </p>
-              </div>
+              feedTab() === 'archived' ? (
+                <div class="empty">
+                  <p>Nothing archived.</p>
+                  <p class="muted">Archive a message to keep it out of the feed without deleting it.</p>
+                </div>
+              ) : (
+                <div class="empty">
+                  <p>Nothing pushed yet.</p>
+                  <p class="muted">
+                    Send a link, note, or photo below—or share straight from Android’s Share menu.
+                  </p>
+                </div>
+              )
             }
           >
             {(msg) => {
@@ -1334,12 +1593,90 @@ export default function App() {
               const isFile = msg.type === 'file';
               const isImage = isFile && Boolean(msg.mimeType?.startsWith('image/'));
               const fileUrl = () => (msg.blobId ? blobUrls()[msg.blobId] : undefined);
+              const isSelected = () => selectedIds().includes(msg.id);
+
+              // Swipe left to archive (touch and pen only; mouse users have the icon).
+              let cardEl: HTMLElement | undefined;
+              let revealEl: HTMLDivElement | undefined;
+              let swipe: { x0: number; y0: number; dx: number; active: boolean; pid: number } | null =
+                null;
+              const resetSwipe = () => {
+                swipe = null;
+                if (cardEl) {
+                  cardEl.classList.remove('dragging');
+                  cardEl.style.transform = '';
+                }
+                if (revealEl) revealEl.style.opacity = '0';
+              };
+              const onPointerDown = (e: PointerEvent) => {
+                if (e.pointerType === 'mouse' || msg.archivedAt || selecting()) return;
+                if ((e.target as HTMLElement).closest('a, button')) return;
+                swipe = { x0: e.clientX, y0: e.clientY, dx: 0, active: false, pid: e.pointerId };
+              };
+              const onPointerMove = (e: PointerEvent) => {
+                if (!swipe || e.pointerId !== swipe.pid || !cardEl || !revealEl) return;
+                const dx = Math.min(0, e.clientX - swipe.x0);
+                const dy = e.clientY - swipe.y0;
+                if (!swipe.active) {
+                  if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
+                    swipe.active = true;
+                    cardEl.classList.add('dragging');
+                    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                  } else if (Math.abs(dy) > 8) {
+                    swipe = null;
+                    return;
+                  } else {
+                    return;
+                  }
+                }
+                swipe.dx = dx;
+                cardEl.style.transform = `translateX(${dx}px)`;
+                revealEl.style.opacity = String(Math.min(1, -dx / SWIPE_ARCHIVE_PX));
+              };
+              const onPointerUp = () => {
+                if (!swipe?.active || !cardEl) {
+                  swipe = null;
+                  return;
+                }
+                const archive = swipe.dx < -SWIPE_ARCHIVE_PX;
+                swipe = null;
+                cardEl.classList.remove('dragging');
+                if (archive) {
+                  cardEl.style.transform = 'translateX(-110%)';
+                  window.setTimeout(() => archiveIds([msg.id]), 160);
+                } else {
+                  resetSwipe();
+                }
+              };
 
               return (
-                <div class={`bubble-row ${msg.direction}`}>
-                  <article class={`bubble ${msg.direction}`}>
+                <div
+                  class={`bubble-row ${msg.direction}`}
+                  onPointerDown={onPointerDown}
+                  onPointerMove={onPointerMove}
+                  onPointerUp={onPointerUp}
+                  onPointerCancel={resetSwipe}
+                >
+                  <Show when={!msg.archivedAt}>
+                    <div class="swipe-reveal" ref={revealEl} aria-hidden="true">
+                      <ArchiveIcon />
+                      Archive
+                    </div>
+                  </Show>
+                  <article
+                    ref={cardEl}
+                    class={`bubble ${msg.direction} ${isSelected() ? 'selected' : ''}`}
+                    onClick={(e) => {
+                      if (!selecting()) return;
+                      e.preventDefault();
+                      toggleSelected(msg.id);
+                    }}
+                  >
                     <div class="bubble-head">
                       <span class="sender-tag">
+                        <Show when={selecting()}>
+                          <span class="select-check" aria-hidden="true" />
+                        </Show>
                         <OsIcon os={os} size={13} />
                         <span>
                           {label}
@@ -1420,6 +1757,39 @@ export default function App() {
                           Copy
                         </button>
                       </Show>
+                      <span class="actions-spacer" />
+                      <Show
+                        when={msg.archivedAt}
+                        fallback={
+                          <>
+                            <button
+                              class="msg-icon-btn"
+                              title="Archive"
+                              aria-label="Archive"
+                              onClick={() => archiveIds([msg.id])}
+                            >
+                              <ArchiveIcon />
+                            </button>
+                            <button
+                              class="msg-icon-btn danger"
+                              title="Delete"
+                              aria-label="Delete"
+                              onClick={() => deleteIds([msg.id])}
+                            >
+                              <TrashIcon />
+                            </button>
+                          </>
+                        }
+                      >
+                        <button class="chip" onClick={() => restoreIds([msg.id])}>
+                          <RestoreIcon />
+                          Restore
+                        </button>
+                        <button class="chip danger" onClick={() => deleteIds([msg.id])}>
+                          <TrashIcon />
+                          Delete
+                        </button>
+                      </Show>
                     </div>
                   </article>
                 </div>
@@ -1429,6 +1799,82 @@ export default function App() {
           <div ref={chatEndEl} />
         </main>
 
+        <Show when={undoToast()}>
+          <div class="undo-toast" role="status">
+            <span>{undoToast()?.text}</span>
+            <button class="text-btn" onClick={runUndo}>
+              Undo
+            </button>
+          </div>
+        </Show>
+
+        <Show when={selecting()}>
+          <div class="bulk-bar">
+            <span class="bulk-count">{selectedIds().length} selected</span>
+            <Show
+              when={feedTab() === 'archived'}
+              fallback={
+                <button
+                  class="btn primary small"
+                  disabled={selectedIds().length === 0}
+                  onClick={() => runBulk('archive')}
+                >
+                  <ArchiveIcon />
+                  Archive
+                </button>
+              }
+            >
+              <button
+                class="btn secondary small"
+                disabled={selectedIds().length === 0}
+                onClick={() => runBulk('restore')}
+              >
+                <RestoreIcon />
+                Restore
+              </button>
+            </Show>
+            <button
+              class="btn danger small"
+              disabled={selectedIds().length === 0}
+              onClick={() => runBulk('delete')}
+            >
+              <TrashIcon />
+              Delete
+            </button>
+          </div>
+        </Show>
+
+        <Show when={!selecting() && feedTab() === 'archived' && archivedMessages().length > 0}>
+          <div class="archive-footer">
+            <Show
+              when={confirmDeleteAll()}
+              fallback={
+                <button class="text-btn danger" onClick={() => setConfirmDeleteAll(true)}>
+                  Delete all archived
+                </button>
+              }
+            >
+              <span>
+                Delete {archivedMessages().length} message
+                {archivedMessages().length === 1 ? '' : 's'} everywhere?
+              </span>
+              <button
+                class="btn danger small"
+                onClick={() => {
+                  setConfirmDeleteAll(false);
+                  deleteIds(archivedMessages().map((m) => m.id));
+                }}
+              >
+                Delete
+              </button>
+              <button class="btn secondary small" onClick={() => setConfirmDeleteAll(false)}>
+                Keep
+              </button>
+            </Show>
+          </div>
+        </Show>
+
+        <Show when={!selecting() && feedTab() === 'feed'}>
         <Show when={otherDevices().length > 1}>
           <div class="target-bar">
             <span class="target-label">To:</span>
@@ -1510,6 +1956,7 @@ export default function App() {
             </svg>
           </button>
         </footer>
+        </Show>
       </Show>
       </Show>
     </div>

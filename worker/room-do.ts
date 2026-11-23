@@ -53,6 +53,7 @@ interface StoredVapidKeys {
 const SUB_PREFIX = 'sub:';
 const DEV_PREFIX = 'dev:';
 const MSG_PREFIX = 'msg:';
+const OP_PREFIX = 'op:';
 const VAPID_STORAGE_KEY = 'vapid:keys';
 const MAX_TTL_SECONDS = 2419200; // 28 days (Web Push / FCM max)
 const MESSAGE_TTL_MS = MAX_TTL_SECONDS * 1000;
@@ -120,6 +121,10 @@ export class RoomDO extends DurableObject<Env> {
 
     if (path.endsWith('/send') && request.method === 'POST') {
       return this.handleSend(request);
+    }
+
+    if (path.endsWith('/op') && request.method === 'POST') {
+      return this.handleOp(request);
     }
 
     if (path.endsWith('/ack') && request.method === 'POST') {
@@ -446,10 +451,8 @@ export class RoomDO extends DurableObject<Env> {
     });
   }
 
-  private async pruneOldMessages(now: number): Promise<void> {
-    const stored = await this.ctx.storage.list<StoredMessage | EncryptedEnvelope>({
-      prefix: MSG_PREFIX,
-    });
+  private async pruneOldMessages(now: number, prefix = MSG_PREFIX): Promise<void> {
+    const stored = await this.ctx.storage.list<StoredMessage | EncryptedEnvelope>({ prefix });
     const toDelete: string[] = [];
     const entries = Array.from(stored.entries());
 
@@ -566,7 +569,85 @@ export class RoomDO extends DurableObject<Env> {
     }
 
     messages.sort((a, b) => a.ts - b.ts);
-    return Response.json({ messages });
+    const ops = deviceId ? await this.takePendingOps(deviceId, now) : [];
+    return Response.json({ messages, ops });
+  }
+
+  /** Returns the queued archive/delete ops for a device and drops it from their recipients. */
+  private async takePendingOps(deviceId: string, now: number): Promise<EncryptedEnvelope[]> {
+    const stored = await this.ctx.storage.list<StoredMessage>({ prefix: OP_PREFIX });
+    const toDelete: string[] = [];
+    const ops: EncryptedEnvelope[] = [];
+
+    for (const [key, entry] of stored) {
+      if (now - entry.envelope.ts > MESSAGE_TTL_MS) {
+        toDelete.push(key);
+        continue;
+      }
+      if (!entry.remaining.includes(deviceId)) continue;
+      ops.push(entry.envelope);
+      const next = entry.remaining.filter((id) => id !== deviceId);
+      if (next.length === 0) {
+        toDelete.push(key);
+      } else {
+        await this.ctx.storage.put(key, { envelope: entry.envelope, remaining: next });
+      }
+    }
+
+    if (toDelete.length > 0) {
+      await this.ctx.storage.delete(toDelete);
+    }
+    ops.sort((a, b) => a.ts - b.ts);
+    return ops;
+  }
+
+  /**
+   * Relays an encrypted archive/restore/delete op to the room's other devices: online ones get
+   * it over their WebSocket, offline ones pick it up from /pending. Ops never trigger Web Push,
+   * so they stay invisible to clients that don't understand them.
+   */
+  private async handleOp(request: Request): Promise<Response> {
+    const envelope = (await request.json()) as EncryptedEnvelope;
+
+    if (!envelope.id || !envelope.senderId || !envelope.iv || !envelope.ciphertext) {
+      return Response.json({ error: 'Invalid encrypted envelope' }, { status: 400 });
+    }
+    if (envelope.ciphertext.length > 3500) {
+      return Response.json({ error: 'Op too large' }, { status: 413 });
+    }
+
+    const now = Date.now();
+    envelope.ts = envelope.ts || now;
+    delete envelope.targetIds;
+
+    const serialized = JSON.stringify({ type: 'op', envelope });
+    const onlineIds = new Set<string>();
+    for (const ws of this.ctx.getWebSockets()) {
+      const tags = this.ctx.getTags(ws);
+      if (tags.includes(envelope.senderId)) continue;
+      try {
+        ws.send(serialized);
+        for (const t of tags) onlineIds.add(t);
+      } catch {
+        // Ignore dead sockets
+      }
+    }
+
+    const allDevices = await this.ctx.storage.list<StoredDevice>({ prefix: DEV_PREFIX });
+    const remaining: string[] = [];
+    for (const dev of allDevices.values()) {
+      if (dev.deviceId === envelope.senderId || onlineIds.has(dev.deviceId)) continue;
+      remaining.push(dev.deviceId);
+    }
+
+    if (remaining.length > 0) {
+      const paddedTs = String(envelope.ts).padStart(15, '0');
+      const record: StoredMessage = { envelope, remaining };
+      await this.ctx.storage.put(`${OP_PREFIX}${paddedTs}:${envelope.id}`, record);
+      await this.pruneOldMessages(now, OP_PREFIX);
+    }
+
+    return Response.json({ ok: true });
   }
 
   private async handleSend(request: Request): Promise<Response> {

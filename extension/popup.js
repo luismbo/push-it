@@ -113,6 +113,38 @@ function createOsSvg(os, size = 13) {
   return svg;
 }
 
+const MSG_ICON_PATHS = {
+  archive: 'M3 4h18v5H3zM5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4',
+  trash: 'M4 7h16M10 11v6M14 11v6M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12M9 7V4h6v3',
+};
+
+function createMsgIcon(name) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('class', 'msg-icon');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('d', MSG_ICON_PATHS[name]);
+  svg.appendChild(path);
+  return svg;
+}
+
+function createIconButton(name, label, onClick) {
+  const btn = document.createElement('button');
+  btn.className = `msg-icon-btn${name === 'trash' ? ' danger' : ''}`;
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  btn.appendChild(createMsgIcon(name));
+  btn.onclick = onClick;
+  return btn;
+}
+
+async function sendMessageOp(op, ids, toast) {
+  const res = await chrome.runtime.sendMessage({ type: 'MESSAGE_OP', op, ids }).catch(() => null);
+  showToast(res?.ok ? toast : 'Could not update history');
+}
+
 function showToast(msg) {
   toastEl.textContent = msg;
   toastEl.classList.remove('hidden');
@@ -347,7 +379,9 @@ async function refresh() {
   renderHistory(state.history || []);
 }
 
-function renderHistory(items) {
+function renderHistory(allItems) {
+  // Archived messages live in the web app's Archived tab; the popup only shows the feed.
+  const items = allItems.filter((m) => !m.archivedAt);
   historyList.innerHTML = '';
   if (!items.length) {
     const empty = document.createElement('div');
@@ -449,6 +483,32 @@ function renderHistory(items) {
       };
       actions.appendChild(copyBtn);
     }
+
+    const spacer = document.createElement('span');
+    spacer.className = 'actions-spacer';
+    actions.appendChild(spacer);
+    actions.appendChild(
+      createIconButton('archive', 'Archive', () => sendMessageOp('archive', [item.id], 'Archived')),
+    );
+    actions.appendChild(
+      createIconButton('trash', 'Delete', () => {
+        // There's no undo in the popup, so ask first, right on the message.
+        actions.replaceChildren();
+        actions.classList.add('confirm');
+        const question = document.createElement('span');
+        question.className = 'confirm-text';
+        question.textContent = 'Delete on all devices?';
+        const del = document.createElement('button');
+        del.className = 'chip danger';
+        del.textContent = 'Delete';
+        del.onclick = () => sendMessageOp('delete', [item.id], 'Deleted');
+        const keep = document.createElement('button');
+        keep.className = 'chip';
+        keep.textContent = 'Keep';
+        keep.onclick = () => refresh();
+        actions.append(question, del, keep);
+      }),
+    );
 
     bubble.appendChild(actions);
     row.appendChild(bubble);
@@ -660,6 +720,13 @@ clearBtn.addEventListener('click', async () => {
   await chrome.storage.local.set({ history: [] });
   showToast('History cleared');
   refresh();
+});
+
+// Archive/delete (from here or another device) and new messages update the stored history.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.history) {
+    renderHistory(Array.isArray(changes.history.newValue) ? changes.history.newValue : []);
+  }
 });
 
 chrome.runtime.sendMessage({ type: 'MARK_READ' }).catch(() => {});
