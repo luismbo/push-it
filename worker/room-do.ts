@@ -7,6 +7,7 @@ import {
 
 export interface Env {
   ROOMS: DurableObjectNamespace<RoomDO>;
+  PAIRS: DurableObjectNamespace<import('./pair-do').PairDO>;
   ASSETS: Fetcher;
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;

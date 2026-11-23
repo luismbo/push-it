@@ -34,8 +34,21 @@
           </div>
           <div id="deviceList" class="device-list"></div>
           <div id="pairBox" class="pair-box hidden">
-            <label class="label" for="pairInput">Paste pair link from Push It</label>
-            <input id="pairInput" type="text" placeholder="Paste pair link here..." />
+            <label class="label" for="pairInput">
+              Code from Push It → Settings → + Add Device, or a pair link
+            </label>
+            <input
+              id="pairInput"
+              type="text"
+              placeholder="e.g. 42 amazing ketchup river"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <div id="pairSuggestions" class="word-suggestions hidden"></div>
+            <div id="serverBox" class="server-box hidden">
+              <label class="label" for="serverInput">Your Push It address</label>
+              <input id="serverInput" type="text" placeholder="push-it.example.workers.dev" spellcheck="false" />
+            </div>
             <button id="savePair" class="btn primary">Save &amp; Connect</button>
           </div>
         </div>

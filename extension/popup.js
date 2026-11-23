@@ -6,6 +6,7 @@ import {
   isSafeHttpUrl,
   isValidKeyB64,
 } from './crypto.js';
+import { completeWord, joinPairing, looksLikeCode, PairingError, parseCode, suggestWords } from './pairing.js';
 
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
@@ -20,6 +21,9 @@ const togglePairBtn = document.getElementById('togglePairBtn');
 const pairBox = document.getElementById('pairBox');
 const pairInput = document.getElementById('pairInput');
 const savePairBtn = document.getElementById('savePair');
+const pairSuggestions = document.getElementById('pairSuggestions');
+const serverBox = document.getElementById('serverBox');
+const serverInput = document.getElementById('serverInput');
 const autoOpenEl = document.getElementById('autoOpen');
 const targetBar = document.getElementById('targetBar');
 const sendTabBtn = document.getElementById('sendTab');
@@ -530,8 +534,104 @@ togglePairBtn.addEventListener('click', () => {
   pairBox.classList.toggle('hidden');
 });
 
+function updatePairHints() {
+  const raw = pairInput.value;
+  const isCode = looksLikeCode(raw);
+  // A code doesn't say which server it came from, so ask once if we don't know yet.
+  serverBox.classList.toggle('hidden', !isCode || Boolean(currentServerUrl));
+
+  pairSuggestions.replaceChildren();
+  const words = suggestWords(raw);
+  pairSuggestions.classList.toggle('hidden', words.length === 0);
+  for (const word of words) {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.type = 'button';
+    chip.textContent = word;
+    chip.onclick = () => {
+      pairInput.value = completeWord(pairInput.value, word);
+      pairInput.focus();
+      updatePairHints();
+    };
+    pairSuggestions.appendChild(chip);
+  }
+}
+
+pairInput.addEventListener('input', updatePairHints);
+pairInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') savePairBtn.click();
+});
+
+/** "push-it.example.workers.dev" or a full URL → its origin, or null. */
+function parseServerOrigin(input) {
+  const raw = input.trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+async function pairWithCode(raw) {
+  const code = parseCode(raw);
+  if (!code) {
+    showToast('A code is a number and three words');
+    return;
+  }
+  const origin = currentServerUrl ? new URL(currentServerUrl).origin : parseServerOrigin(serverInput.value);
+  if (!origin) {
+    showToast('Enter your Push It address');
+    serverInput.focus();
+    return;
+  }
+
+  // Must be the first await so it still counts as a user gesture in Firefox.
+  const granted = await chrome.permissions.request({ origins: [originPattern(origin)] });
+  if (!granted) {
+    showToast(`Allow access to ${new URL(origin).host} to connect`);
+    return;
+  }
+
+  savePairBtn.disabled = true;
+  savePairBtn.textContent = 'Pairing…';
+  let keyB64;
+  try {
+    keyB64 = await joinPairing(origin, code);
+  } catch (err) {
+    showToast(err instanceof PairingError ? err.message : `Could not reach ${new URL(origin).host}`);
+    return;
+  } finally {
+    savePairBtn.disabled = false;
+    savePairBtn.textContent = 'Save & Connect';
+  }
+  await finishPairing(origin, keyB64);
+}
+
+async function finishPairing(origin, keyB64) {
+  await chrome.storage.local.set({ serverUrl: origin, keyB64 });
+  pairInput.value = '';
+  serverInput.value = '';
+  updatePairHints();
+  pairBox.classList.add('hidden');
+  await chrome.runtime.sendMessage({ type: 'RECONNECT' });
+  if (await checkPrivateServer(origin, keyB64)) {
+    showToast('This server is private · click the status to learn more');
+    setTimeout(refresh, 0);
+    return;
+  }
+  setView(false);
+  showToast('Paired!');
+  setTimeout(refresh, 600);
+}
+
 savePairBtn.addEventListener('click', async () => {
   const raw = pairInput.value.trim();
+  if (looksLikeCode(raw)) {
+    await pairWithCode(raw);
+    return;
+  }
   try {
     const parsed = new URL(raw);
     const hashParams = new URLSearchParams(parsed.hash.replace(/^#/, ''));
@@ -548,23 +648,9 @@ savePairBtn.addEventListener('click', async () => {
       return;
     }
 
-    await chrome.storage.local.set({
-      serverUrl: parsed.origin,
-      keyB64,
-    });
-    pairInput.value = '';
-    pairBox.classList.add('hidden');
-    await chrome.runtime.sendMessage({ type: 'RECONNECT' });
-    if (await checkPrivateServer(parsed.origin, keyB64)) {
-      showToast('This server is private · click the status to learn more');
-      setTimeout(refresh, 0);
-      return;
-    }
-    setView(false);
-    showToast('Paired!');
-    setTimeout(refresh, 600);
+    await finishPairing(parsed.origin, keyB64);
   } catch {
-    showToast('Paste the full pair link');
+    showToast('Enter a code like 42 amazing ketchup river, or paste the full pair link');
   }
 });
 

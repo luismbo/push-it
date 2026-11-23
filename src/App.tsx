@@ -33,6 +33,16 @@ import {
   type StoredMessage,
 } from './lib/db';
 import { chunkIds, parseOp, type MessageOp, type MessageOpKind } from './lib/ops';
+import {
+  completeWord,
+  hostPairing,
+  joinPairing,
+  looksLikeCode,
+  PairingError,
+  parseCode,
+  suggestWords,
+  type PairCode,
+} from './lib/pairing';
 import { defaultDeviceName, detectOs, normalizeOs, type DeviceOs } from './lib/device';
 import {
   getCurrentPushSubscription,
@@ -126,6 +136,10 @@ export default function App() {
   // Messages deleted locally but still within their undo window.
   const [hiddenIds, setHiddenIds] = createSignal<string[]>([]);
   const [undoToast, setUndoToast] = createSignal<{ text: string; undo: () => void } | null>(null);
+  const [pairCode, setPairCode] = createSignal<{ code: PairCode; expiresAt: number } | null>(null);
+  const [pairError, setPairError] = createSignal('');
+  const [pairNow, setPairNow] = createSignal(Date.now());
+  const [joining, setJoining] = createSignal(false);
   const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.0.0';
 
   let chatEndEl: HTMLDivElement | undefined;
@@ -164,6 +178,13 @@ export default function App() {
   const shownMessages = createMemo(() =>
     feedTab() === 'archived' ? archivedMessages() : feedMessages(),
   );
+
+  const joinSuggestions = createMemo(() => suggestWords(importInput()));
+  const pairCountdown = createMemo(() => {
+    const left = Math.max(0, (pairCode()?.expiresAt ?? 0) - pairNow());
+    const secs = Math.ceil(left / 1000);
+    return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+  });
 
   const pairUrl = createMemo(() => {
     const k = keyB64();
@@ -523,6 +544,43 @@ export default function App() {
       })
         .then(setQrDataUrl)
         .catch(() => {});
+    },
+  );
+
+  // 2b. Show a one-time pairing code while Add Device is open
+  createEffect(
+    () => [view(), showAddDevice(), roomId(), keyB64(), privateServer()] as const,
+    ([activeView, adding, rid, k, blocked]) => {
+      if (activeView !== 'settings' || !adding || !rid || !k || blocked) return;
+      const ac = new AbortController();
+      setPairCode(null);
+      setPairError('');
+      const tick = window.setInterval(() => setPairNow(Date.now()), 1000);
+      hostPairing(
+        window.location.origin,
+        rid,
+        k,
+        (e) => {
+          if (e.type === 'code') {
+            setPairError('');
+            setPairCode({ code: e.code, expiresAt: e.expiresAt });
+          } else if (e.type === 'paired') {
+            notify('Device paired!');
+            refreshDevices();
+          } else if (e.type === 'mismatch') {
+            notify('Wrong words were entered, so here is a new code');
+          } else {
+            setPairCode(null);
+            setPairError(e.message);
+          }
+        },
+        ac.signal,
+      ).catch(() => {});
+      return () => {
+        ac.abort();
+        window.clearInterval(tick);
+        setPairCode(null);
+      };
     },
   );
 
@@ -1108,11 +1166,31 @@ export default function App() {
   async function handleImportKey() {
     let raw = importInput().trim();
     if (!raw) return;
-    if (raw.includes('#key=')) {
+    if (looksLikeCode(raw)) {
+      const code = parseCode(raw);
+      if (!code) {
+        notify('A code is a number and three words, like 42 amazing ketchup river');
+        return;
+      }
+      setJoining(true);
+      try {
+        raw = await joinPairing(window.location.origin, code);
+      } catch (e) {
+        notify(e instanceof PairingError ? e.message : 'Could not reach the server. Try again.');
+        return;
+      } finally {
+        setJoining(false);
+      }
+    } else if (raw.includes('#key=')) {
       raw = decodeURIComponent(raw.split('#key=')[1].split('&')[0]);
     }
     if (!isValidKeyB64(raw)) {
       notify('That pair link is not valid');
+      return;
+    }
+    if (raw === keyB64()) {
+      setImportInput('');
+      notify('This device is already in that room');
       return;
     }
     await kvSet('keyB64', raw);
@@ -1138,7 +1216,7 @@ export default function App() {
     }
     await registerDeviceRecord(rid, fresh, deviceId(), deviceName(), localOs);
     await refreshDevices(rid, fresh, deviceId());
-    notify('Created a new pairing code');
+    notify('Started a new room');
   }
 
   async function copyToClipboard(text: string, label = 'Copied') {
@@ -1233,7 +1311,7 @@ export default function App() {
               <div class="import-row">
                 <input
                   type="text"
-                  placeholder="Paste pair link..."
+                  placeholder="Pair code or link..."
                   value={importInput()}
                   onInput={(e) => setImportInput(e.currentTarget.value)}
                 />
@@ -1337,9 +1415,26 @@ export default function App() {
 
               <Show when={showAddDevice()}>
                 <div class="divider" />
-                <p class="muted">
-                  Scan this code on your phone or copy the link into another device.
-                </p>
+                <div class="pair-code-box">
+                  <span class="muted">
+                    On the new device, open Push It → <strong>Settings</strong> →{' '}
+                    <strong>+ Add Device</strong> and enter this code:
+                  </span>
+                  <Show
+                    when={pairCode()}
+                    fallback={<span class="muted">{pairError() || 'Getting a code…'}</span>}
+                  >
+                    <div class="pair-code" aria-label="Pairing code">
+                      <span class="pair-num">{pairCode()?.code.nameplate}</span>
+                      <span class="pair-words">{pairCode()?.code.words.join(' ')}</span>
+                    </div>
+                    <span class="muted">
+                      Keep this screen open. Works once, expires in{' '}
+                      <span class="tabular">{pairCountdown()}</span>.
+                    </span>
+                  </Show>
+                </div>
+                <p class="muted">Or scan this QR code, or copy the link to the other device.</p>
                 <Show when={qrDataUrl()}>
                   <div class="qr-wrap">
                     <img src={qrDataUrl()} alt="Pairing QR Code" class="qr-img" />
@@ -1352,21 +1447,51 @@ export default function App() {
                   >
                     Copy Pair Link
                   </button>
-                  <button class="btn secondary" onClick={handleRotateKey}>
-                    New Code
+                  <button
+                    class="btn secondary"
+                    title="Move this device to a fresh room with a new key. Other devices stay in the old one."
+                    onClick={handleRotateKey}
+                  >
+                    New Room
                   </button>
                 </div>
-                <div class="import-row">
+                <div class="divider" />
+                <strong>Is this the new device?</strong>
+                <form
+                  class="import-row"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleImportKey();
+                  }}
+                >
                   <input
                     type="text"
-                    placeholder="Paste pair link from another device..."
+                    autocomplete="off"
+                    autocapitalize="none"
+                    spellcheck={false}
+                    placeholder="Code from your other device, or a pair link"
                     value={importInput()}
                     onInput={(e) => setImportInput(e.currentTarget.value)}
                   />
-                  <button class="btn secondary" onClick={handleImportKey}>
-                    Pair
+                  <button class="btn secondary" type="submit" disabled={joining()}>
+                    {joining() ? 'Pairing…' : 'Pair'}
                   </button>
-                </div>
+                </form>
+                <Show when={joinSuggestions().length > 0}>
+                  <div class="word-suggestions">
+                    <For each={joinSuggestions()}>
+                      {(word) => (
+                        <button
+                          type="button"
+                          class="chip"
+                          onClick={() => setImportInput(completeWord(importInput(), word))}
+                        >
+                          {word}
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                </Show>
               </Show>
             </section>
 
@@ -1441,8 +1566,8 @@ export default function App() {
                   <p class="muted">To update later, unzip over the same folder and click reload.</p>
                 </details>
                 <span class="muted">
-                  Then open the extension, paste a pair link from <strong>+ Add Device</strong> above, and
-                  click <strong>Save &amp; Connect</strong>.
+                  Then open the extension and enter the code from <strong>+ Add Device</strong> above, or
+                  paste the pair link.
                 </span>
               </section>
             </Show>

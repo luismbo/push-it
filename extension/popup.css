@@ -626,6 +626,18 @@ input[type='text']:focus {
   border-top: 1px solid var(--border);
 }
 
+.server-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.word-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .version-footer {
   display: flex;
   align-items: center;

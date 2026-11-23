@@ -46,7 +46,7 @@ Nothing runs on your local machine. Open a link on your phone, tap **Share → P
         └── Offline Phone  ──▶ Web Push (RFC 8291) ──▶ Service Worker decrypts & notifies
 ```
 
-1. **Zero-Knowledge Pairing:** Your first device generates a random 256-bit key and derives a one-way `SHA-256` room ID. Scanning the QR code or pasting the `#key=...` link pairs another device — URL fragments are never sent to the server.
+1. **Zero-Knowledge Pairing:** Your first device generates a random 256-bit key and derives a one-way `SHA-256` room ID. To pair another device, scan the QR code, paste the `#key=...` link (URL fragments are never sent to the server), or type the one-time code shown under **+ Add Device**, such as `53 aisle stove outside`. The code works once and expires after 10 minutes. Its three words never leave your devices: both sides run a password-authenticated key exchange (SPAKE2 over ristretto255), so the server only relays values it can't use to recover your key.
 2. **Real-Time & Offline Delivery:** Online devices receive messages immediately over a hibernating WebSocket. Offline devices receive them via Web Push (Android) or the 28-day encrypted Durable Object queue (desktop), which deletes each message the moment all intended recipients receive it.
 3. **Encrypted Blobs:** Photos, files, and long notes are encrypted into raw binary chunks in Durable Object SQLite storage, with only a tiny encrypted pointer sent over WebSocket/Push. Blobs are deleted automatically once downloaded by every recipient.
 
@@ -120,5 +120,5 @@ Notes:
 
 ### Pair it
 
-1. Open your deployed Push It URL → **Settings → + Add Device → Copy Pair Link**.
-2. Click the **Push It** toolbar icon, paste the pair link, and click **Save & Connect**.
+1. Open your deployed Push It URL → **Settings → + Add Device**.
+2. Click the **Push It** toolbar icon and enter the code shown there (the first time, it also asks for your Push It address), or paste the pair link from **Copy Pair Link**. Then click **Save & Connect**.

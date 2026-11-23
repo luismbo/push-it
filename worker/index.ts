@@ -1,7 +1,8 @@
 import pkg from '../package.json';
+import { PAIR_DO_NAME, PairDO } from './pair-do';
 import { RoomDO, VAPID_DO_NAME, type Env } from './room-do';
 
-export { RoomDO };
+export { PairDO, RoomDO };
 
 const ROOM_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -38,6 +39,21 @@ export default {
       const res = await vapidStub.fetch('https://internal/internal/vapid-keys');
       const keys = (await res.json()) as { publicKey: string };
       return Response.json({ publicKey: keys.publicKey });
+    }
+
+    if (url.pathname === '/api/pair' || url.pathname.startsWith('/api/pair/')) {
+      // Creating a code is tied to a room, so private servers only hand out codes for their
+      // approved rooms. Joining needs no room: the joiner doesn't know it yet.
+      if (url.pathname === '/api/pair' && request.method === 'POST') {
+        const body = (await request.clone().json().catch(() => ({}))) as { roomId?: string };
+        if (!body.roomId || !ROOM_ID_RE.test(body.roomId)) {
+          return Response.json({ error: 'Invalid roomId' }, { status: 400 });
+        }
+        if (!isRoomAllowed(env, body.roomId)) {
+          return Response.json({ error: 'This server only allows approved rooms' }, { status: 403 });
+        }
+      }
+      return env.PAIRS.get(env.PAIRS.idFromName(PAIR_DO_NAME)).fetch(request);
     }
 
     const roomMatch = url.pathname.match(
