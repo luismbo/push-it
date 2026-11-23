@@ -1504,7 +1504,10 @@ export default function App() {
             disabled={sending() || !draft().trim()}
             onClick={() => sendText(draft())}
           >
-            {sending() ? '…' : '↑'}
+            <svg class="send-icon" viewBox="105 96 340 340" aria-hidden="true">
+              <path class="plane" d="M124 268l256-124-76 264-58-82-122-58z" />
+              <path class="fold" d="M246 326l134-182-164 148 30 34z" />
+            </svg>
           </button>
         </footer>
       </Show>

@@ -612,6 +612,20 @@ input:focus {
   padding: 9px 11px;
 }
 
+.send-icon {
+  width: 23px;
+  height: 23px;
+}
+
+.send-icon .plane {
+  fill: var(--on-accent);
+}
+
+.send-icon .fold {
+  fill: var(--accent);
+  opacity: 0.55;
+}
+
 .composer-bar .icon-btn,
 .composer-bar .send-btn {
   width: 38px;
