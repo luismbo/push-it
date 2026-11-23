@@ -53,7 +53,7 @@ async function getConfig() {
     deviceId,
     deviceName,
     deviceOs: LOCAL_OS,
-    autoOpen: typeof data.autoOpen === 'boolean' ? data.autoOpen : true,
+    autoOpen: typeof data.autoOpen === 'boolean' ? data.autoOpen : false,
     history: Array.isArray(data.history) ? data.history : [],
     lastSeenTs: typeof data.lastSeenTs === 'number' ? data.lastSeenTs : 0,
     unreadCount: typeof data.unreadCount === 'number' ? data.unreadCount : 0,

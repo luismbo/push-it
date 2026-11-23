@@ -77,7 +77,7 @@ export default function App() {
   const [draft, setDraft] = createSignal<string>('');
   const [sending, setSending] = createSignal(false);
   const [wsStatus, setWsStatus] = createSignal<'disconnected' | 'connecting' | 'connected'>('disconnected');
-  const [autoOpen, setAutoOpen] = createSignal<boolean>(true);
+  const [autoOpen, setAutoOpen] = createSignal<boolean>(false);
   const [pushEnabled, setPushEnabled] = createSignal<boolean>(false);
   const [pushBusy, setPushBusy] = createSignal<boolean>(false);
   const [qrDataUrl, setQrDataUrl] = createSignal<string>('');
