@@ -507,18 +507,31 @@ input[type='text']:focus {
 }
 
 .send-btn {
+  width: 30px;
   height: 30px;
-  padding: 0 13px;
+  padding: 0;
   border: none;
-  border-radius: 999px;
+  border-radius: 50%;
   background: var(--accent);
-  color: var(--on-accent);
-  font: inherit;
-  font-size: 0.8rem;
-  font-weight: 600;
-  white-space: nowrap;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
+}
+
+.send-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.send-icon .plane {
+  fill: var(--on-accent);
+}
+
+.send-icon .fold {
+  fill: var(--accent);
+  opacity: 0.55;
 }
 
 .send-btn:hover {
