@@ -1204,21 +1204,6 @@ export default function App() {
     notify('Devices paired!');
   }
 
-  async function handleRotateKey() {
-    const fresh = generateRawKeyB64();
-    await kvSet('keyB64', fresh);
-    const rid = await deriveRoomId(fresh);
-    setKeyB64(fresh);
-    setRoomId(rid);
-    if (!(await checkRoomAccess(rid))) {
-      notify('This server only allows approved rooms');
-      return;
-    }
-    await registerDeviceRecord(rid, fresh, deviceId(), deviceName(), localOs);
-    await refreshDevices(rid, fresh, deviceId());
-    notify('Started a new room');
-  }
-
   async function copyToClipboard(text: string, label = 'Copied') {
     try {
       await navigator.clipboard.writeText(text);
@@ -1446,13 +1431,6 @@ export default function App() {
                     onClick={() => copyToClipboard(pairUrl(), 'Pair link copied')}
                   >
                     Copy Pair Link
-                  </button>
-                  <button
-                    class="btn secondary"
-                    title="Move this device to a fresh room with a new key. Other devices stay in the old one."
-                    onClick={handleRotateKey}
-                  >
-                    New Room
                   </button>
                 </div>
                 <div class="divider" />
