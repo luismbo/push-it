@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from 'solid-js';
 import QRCode from 'qrcode';
 import { OsIcon } from './components/OsIcon';
 import {
@@ -52,6 +52,13 @@ export default function App() {
   const localOs: DeviceOs = detectOs();
   const isMobile = localOs === 'android' || localOs === 'ios';
   const isFirefox = /Firefox\//.test(navigator.userAgent);
+
+  // The full composer hint wraps onto a clipped second line on phone-width screens.
+  const narrowQuery = window.matchMedia('(max-width: 480px)');
+  const [narrowComposer, setNarrowComposer] = createSignal(narrowQuery.matches);
+  const onNarrowChange = (e: MediaQueryListEvent) => setNarrowComposer(e.matches);
+  narrowQuery.addEventListener('change', onNarrowChange);
+  onCleanup(() => narrowQuery.removeEventListener('change', onNarrowChange));
 
   const [view, setView] = createSignal<'chat' | 'settings'>('chat');
   const [showAddDevice, setShowAddDevice] = createSignal<boolean>(false);
@@ -447,7 +454,7 @@ export default function App() {
       QRCode.toDataURL(url, {
         width: 220,
         margin: 2,
-        color: { dark: '#0b0f19', light: '#ffffff' },
+        color: { dark: '#14161c', light: '#ffffff' },
       })
         .then(setQrDataUrl)
         .catch(() => {});
@@ -1466,7 +1473,7 @@ export default function App() {
           </button>
           <textarea
             rows={1}
-            placeholder="Paste a link, note, or screenshot..."
+            placeholder={narrowComposer() ? 'Paste a link or note…' : 'Paste a link, note, or screenshot…'}
             value={draft()}
             onInput={(e) => setDraft(e.currentTarget.value)}
             onPaste={(e) => {
@@ -1491,11 +1498,13 @@ export default function App() {
             }}
           />
           <button
-            class="btn primary"
+            class="btn primary send-btn"
+            title="Push It"
+            aria-label="Push It"
             disabled={sending() || !draft().trim()}
             onClick={() => sendText(draft())}
           >
-            {sending() ? '...' : 'Push It'}
+            {sending() ? '…' : '↑'}
           </button>
         </footer>
       </Show>

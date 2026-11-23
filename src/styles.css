@@ -1,20 +1,23 @@
 :root {
   color-scheme: dark;
-  --bg: #0b0f19;
-  --surface: #131a2a;
-  --surface-2: #1b253b;
-  --border: #26334d;
-  --text: #eef2ff;
-  --muted: #94a3b8;
-  --accent: #6366f1;
-  --accent-hover: #4f46e5;
-  --bubble-out: #272d66;
-  --bubble-out-border: #434ca8;
-  --bubble-in: #142233;
-  --bubble-in-border: #1e3a52;
-  --cyan: #06b6d4;
-  --green: #10b981;
-  --amber: #f59e0b;
+  --bg: #14161c;
+  --surface: #1c1f27;
+  --surface-2: #252935;
+  --surface-3: #171920;
+  --border: #2e3340;
+  --text: #f1efe9;
+  --text-2: #d6d3cb;
+  --muted: #9b9aa0;
+  --accent: #f0a830;
+  --accent-hover: #f5b84d;
+  --on-accent: #241703;
+  --link: #f5c26b;
+  --card-in: #1c1f27;
+  --card-out: #171920;
+  --card-out-text: #c9c7c0;
+  --green: #6fcf8f;
+  --warn: #f59e0b;
+  --danger: #f28b82;
 }
 
 * {
@@ -101,7 +104,7 @@ h2 {
 }
 
 .dot.connecting {
-  background: var(--amber);
+  background: var(--warn);
 }
 
 .room-pill {
@@ -158,9 +161,9 @@ h2 {
   left: 50%;
   transform: translateX(-50%);
   z-index: 30;
-  background: #1e293b;
-  border: 1px solid var(--cyan);
-  color: #e0f2fe;
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  color: var(--text);
   padding: 8px 14px;
   border-radius: 999px;
   font-size: 0.82rem;
@@ -295,17 +298,10 @@ h2 {
   width: 100%;
 }
 
-.bubble-row.in {
-  justify-content: flex-start;
-}
-
-.bubble-row.out {
-  justify-content: flex-end;
-}
-
 .bubble {
-  max-width: 84%;
-  border-radius: 14px;
+  width: 100%;
+  min-width: 0;
+  border-radius: 10px;
   padding: 9px 12px;
   display: flex;
   flex-direction: column;
@@ -314,15 +310,14 @@ h2 {
 }
 
 .bubble.in {
-  background: var(--bubble-in);
-  border-color: var(--bubble-in-border);
-  border-bottom-left-radius: 4px;
+  background: var(--card-in);
+  border-left: 3px solid var(--accent);
 }
 
 .bubble.out {
-  background: var(--bubble-out);
-  border-color: var(--bubble-out-border);
-  border-bottom-right-radius: 4px;
+  background: var(--card-out);
+  border-left: 3px solid var(--muted);
+  color: var(--card-out-text);
 }
 
 .bubble-head {
@@ -339,7 +334,7 @@ h2 {
   align-items: center;
   gap: 5px;
   font-weight: 600;
-  color: #cbd5e1;
+  color: var(--text-2);
 }
 
 .bubble-title {
@@ -348,7 +343,7 @@ h2 {
 }
 
 .bubble-body a {
-  color: #7dd3fc;
+  color: var(--link);
   word-break: break-all;
   font-size: 0.9rem;
 }
@@ -383,10 +378,11 @@ h2 {
 .chip.primary {
   background: var(--accent);
   border-color: transparent;
+  color: var(--on-accent);
 }
 
 .chip.danger {
-  color: #fca5a5;
+  color: var(--danger);
   border-color: rgba(239, 68, 68, 0.35);
 }
 
@@ -440,7 +436,7 @@ h2 {
   gap: 6px;
   padding: 7px 12px;
   border-top: 1px solid var(--border);
-  background: #0f1524;
+  background: var(--surface-3);
   overflow-x: auto;
   flex-shrink: 0;
 }
@@ -470,7 +466,7 @@ h2 {
 .target-pill.active {
   background: var(--accent);
   border-color: transparent;
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .meta-right {
@@ -486,7 +482,7 @@ h2 {
 }
 
 .check.delivered {
-  color: var(--cyan);
+  color: var(--accent);
 }
 
 .hidden-file {
@@ -547,12 +543,18 @@ h2 {
   max-height: 110px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 18px;
   color: var(--text);
-  padding: 9px 11px;
+  padding: 9px 14px;
   font: inherit;
   font-size: 0.92rem;
   line-height: 1.35;
+}
+
+.composer-bar textarea::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .composer-bar textarea:focus,
@@ -582,7 +584,7 @@ input:focus {
 
 .btn.primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .btn.primary:hover:not(:disabled) {
@@ -608,6 +610,16 @@ input:focus {
 
 .icon-btn {
   padding: 9px 11px;
+}
+
+.composer-bar .icon-btn,
+.composer-bar .send-btn {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.1rem;
+  flex-shrink: 0;
 }
 
 .link-btn {

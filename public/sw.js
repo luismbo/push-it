@@ -214,10 +214,10 @@ async function handleSilentShare(url) {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<meta name="theme-color" content="#0b0f19" />
+<meta name="theme-color" content="#14161c" />
 <style>
-  body{margin:0;min-height:100dvh;display:grid;place-items:center;background:#0b0f19;color:#eef2ff;font:600 16px/1.4 system-ui,sans-serif}
-  .pill{padding:12px 20px;border-radius:999px;background:#131a2a;border:1px solid ${ok ? '#10b981' : '#f59e0b'}}
+  body{margin:0;min-height:100dvh;display:grid;place-items:center;background:#14161c;color:#f1efe9;font:600 16px/1.4 system-ui,sans-serif}
+  .pill{padding:12px 20px;border-radius:999px;background:#1c1f27;border:1px solid ${ok ? '#6fcf8f' : '#f59e0b'}}
 </style>
 </head>
 <body>
